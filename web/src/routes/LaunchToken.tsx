@@ -2,18 +2,20 @@ import { ArrowLeft, ChevronDown, ImageIcon, Loader2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { formatUnits, parseUnits } from 'viem'
-import { useAccount, useReadContract } from 'wagmi'
+import { useAccount } from 'wagmi'
 import { ConnectButton } from '@/components/ConnectButton'
 import { WrongChainBanner } from '@/components/Banners'
 import { Clipart } from '@/components/Clipart'
 import { LaunchConfirmDialog } from '@/components/LaunchConfirmDialog'
 import { LaunchPreview } from '@/components/LaunchPreview'
 import { TxStatus } from '@/components/TxStatus'
+import { TxSteps } from '@/components/TxSteps'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { env } from '@/config/env'
 import { useDocumentMeta } from '@/hooks/useDocumentMeta'
 import { useLaunchpadConfig, usePinMetadata } from '@/hooks/useLaunchpad'
+import { useAllowance } from '@/hooks/useAllowance'
 import { useLockerTerms } from '@/hooks/useLockerTerms'
 import { useTransaction } from '@/hooks/useTransaction'
 import { erc20Abi, factoryAbi } from '@/lib/launchpad-abi'
@@ -32,6 +34,7 @@ import {
 } from '@/lib/launch-form'
 import { formatBytes } from '@/lib/image-compress'
 import { formatAmount, fromBaseUnits } from '@/lib/money'
+import { deriveApprovalFlow } from '@/lib/tx-steps'
 import { cn, hasConfusableCharacters } from '@/lib/utils'
 
 /**
@@ -64,6 +67,9 @@ export function LaunchToken() {
   const { address, isConnected } = useAccount()
   const navigate = useNavigate()
   const tx = useTransaction()
+  /** The approval is its own transaction with its own status strip, so a
+   * confirmed approval never sits under the button that launches. */
+  const approveTx = useTransaction()
   const config = useLaunchpadConfig()
   const pin = usePinMetadata()
 
@@ -123,22 +129,25 @@ export function LaunchToken() {
    * `transferFrom`, so a launch with either reverts without an allowance. The
    * form had no approval step at all before this — the failure landed on the
    * creator's very first transaction, which is the worst possible place for it.
+   *
+   * The approval target is `totalDue` — fee *and* dev buy — and the step is
+   * derived from the live allowance, so raising the dev buy after approving
+   * correctly asks for a fresh approval.
    */
-  const { data: allowance } = useReadContract({
-    address: (env.quoteAddress || '0x') as `0x${string}`,
-    abi: erc20Abi,
-    functionName: 'allowance',
-    args: [
-      address ?? '0x0000000000000000000000000000000000000000',
-      (factoryAddress || '0x0000000000000000000000000000000000000000') as `0x${string}`,
-    ],
-    query: {
-       
-      enabled: Boolean(address && factoryAddress && env.quoteAddress) && totalDue > 0n,
-    },
+  const allowance = useAllowance({
+    token: (env.quoteAddress || '') as `0x${string}` | '',
+    owner: address,
+    spender: factoryAddress,
+    enabled: totalDue > 0n,
   })
-  // eslint-disable-next-line money/no-number-on-money -- allowance and totalDue are both bigint base units
-  const needsApproval = totalDue > 0n && (allowance ?? 0n) < totalDue
+  const flow = deriveApprovalFlow({
+    allowance: allowance.allowance,
+    due: totalDue,
+    syncing: allowance.syncing,
+    approveLabel: `Approve ${env.quoteSymbol}`,
+    actLabel: 'Launch token',
+  })
+  const needsApproval = flow.step === 'approve'
 
   const nameConfusable = hasConfusableCharacters(name)
   const symbolConfusable = hasConfusableCharacters(symbol)
@@ -173,9 +182,7 @@ export function LaunchToken() {
                         ? { label: 'Add a metadata URI', blocking: true }
                         : maxDevBuy > 0n && devBuyAmount > maxDevBuy
                           ? { label: 'Reduce the developer buy', blocking: true }
-                          : needsApproval
-                            ? { label: `Approve ${env.quoteSymbol}`, blocking: false }
-                            : { label: 'Launch token', blocking: false }
+                          : { label: flow.label, blocking: flow.waiting }
 
   const pickImage = async (file: File | undefined) => {
     if (!file) return
@@ -202,12 +209,15 @@ export function LaunchToken() {
   /** The CTA. Approves, or pins and opens the dialog — it never signs the launch. */
   const onPrimary = async () => {
     if (needsApproval) {
-      await tx.execute({
+      const hash = await approveTx.execute({
         address: env.quoteAddress as `0x${string}`,
         abi: erc20Abi,
         functionName: 'approve',
         args: [factoryAddress as `0x${string}`, totalDue],
       })
+      // The receipt is in; now make the allowance read agree with it. The
+      // button flips to "Launch token" on its own once it does.
+      if (hash) await allowance.awaitAtLeast(totalDue)
       return
     }
 
@@ -605,10 +615,10 @@ export function LaunchToken() {
               <Button
                 variant="primary"
                 className="mt-3 w-full"
-                disabled={blocker.blocking || tx.isBusy || pin.isPending}
+                disabled={blocker.blocking || tx.isBusy || approveTx.isBusy || pin.isPending}
                 onClick={() => void onPrimary()}
               >
-                {pin.isPending ? 'Uploading metadata…' : tx.isBusy ? 'Working…' : blocker.label}
+                {pin.isPending ? 'Uploading metadata…' : tx.isBusy || approveTx.isBusy ? 'Working…' : blocker.label}
               </Button>
             ) : (
               <div className="mt-3 flex justify-center">
@@ -623,6 +633,17 @@ export function LaunchToken() {
               </p>
             )}
 
+            {isConnected && terms && totalDue > 0n && (
+              <TxSteps
+                steps={flow.steps}
+                hashes={{ approve: approveTx.hash }}
+                busyKey={approveTx.isBusy || flow.waiting ? 'approve' : tx.isBusy ? 'act' : null}
+                className="mt-3"
+              />
+            )}
+            {/* A confirmed approval is reported by the ticked step above, not as
+                a green strip under the next button. */}
+            {approveTx.state !== 'confirmed' && <TxStatus tx={approveTx} className="mt-3" />}
             <TxStatus tx={tx} className="mt-3" />
           </div>
         </Card>

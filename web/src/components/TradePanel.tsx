@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { formatUnits, parseUnits } from 'viem'
 import { useAccount, useReadContract } from 'wagmi'
 import { env } from '@/config/env'
+import { useAllowance } from '@/hooks/useAllowance'
 import { useTransaction } from '@/hooks/useTransaction'
 import { tradeDeadline } from '@/lib/deadline'
 import { defaultMaxFix, shouldOfferPoolFix } from '@/lib/graduation-fix'
 import { curveAbi, erc20Abi, graduationHelperAbi } from '@/lib/launchpad-abi'
 import type { TokenDetail } from '@/lib/launchpad-api'
 import { formatAmount, fromBaseUnits } from '@/lib/money'
+import { deriveApprovalFlow } from '@/lib/tx-steps'
 import { cn, sanitizeText } from '@/lib/utils'
 import { useUiStore } from '@/store/ui'
 import { Button } from './ui/button'
@@ -16,6 +18,7 @@ import { ConnectButton } from './ConnectButton'
 import { RiskDisclosure } from './RiskDisclosure'
 import { SegmentedControl } from './SegmentedControl'
 import { TxStatus } from './TxStatus'
+import { TxSteps } from './TxSteps'
 
 /**
  * Buy/sell against the curve, with a slippage control and an explicit
@@ -39,6 +42,13 @@ import { TxStatus } from './TxStatus'
  * through it (`@/lib/graduation-fix` decides when). Once the curve is complete
  * `sell` reverts, so the Sell side is withdrawn.
  *
+ * Both sides pull with `transferFrom`: a buy pulls USDG, and a sell pulls the
+ * token itself (the token is a plain ERC-20 with no curve exemption). Each is
+ * an approve-then-trade flow shown as two steps; the approval runs on its own
+ * `useTransaction` so its "Confirmed" never sits under the trade button, and
+ * the step advances only when the re-read allowance says it can
+ * (`@/lib/tx-steps`, `useAllowance`).
+ *
  * Gas is never set here: the completing buy costs several times a normal one
  * (it creates and seeds the pool) and the wallet's estimate is the only number
  * that is right for it.
@@ -61,6 +71,10 @@ export function TradePanel({ token }: { token: TokenDetail }) {
   const [fixOffered, setFixOffered] = useState(false)
   const [maxFixInput, setMaxFixInput] = useState('')
   const tx = useTransaction()
+  const approveTx = useTransaction()
+  // One approval transaction serves both the trade and the pool fix; remember
+  // which spender the last one was for so its hash lands on the right step.
+  const [approvedFor, setApprovedFor] = useState<'curve' | 'helper' | null>(null)
 
   // The offer belongs to the amount it was simulated for.
   const setAmount = (next: string) => {
@@ -107,21 +121,17 @@ export function TradePanel({ token }: { token: TokenDetail }) {
     query: { enabled: side === 'sell' && parsedAmount > 0n && !complete },
   })
 
-  const { data: allowance } = useReadContract({
-    address: (env.quoteAddress || '0x') as `0x${string}`,
-    abi: erc20Abi,
-    functionName: 'allowance',
-    args: [address ?? ZERO, curve],
-    query: { enabled: side === 'buy' && Boolean(address) && Boolean(env.quoteAddress) },
-  })
+  const quoteToken = (env.quoteAddress || '') as `0x${string}` | ''
+  // What the curve pulls on this side: USDG for a buy, the token for a sell.
+  const spendToken = side === 'buy' ? quoteToken : (token.address as `0x${string}`)
+  const allowance = useAllowance({ token: spendToken, owner: address, spender: curve })
 
-  const helper = (env.graduationHelper || '0x') as `0x${string}`
-  const { data: helperAllowance, refetch: refetchHelperAllowance } = useReadContract({
-    address: (env.quoteAddress || '0x') as `0x${string}`,
-    abi: erc20Abi,
-    functionName: 'allowance',
-    args: [address ?? ZERO, helper],
-    query: { enabled: fixOffered && Boolean(address) && Boolean(env.quoteAddress) && Boolean(env.graduationHelper) },
+  const helper = (env.graduationHelper || '') as `0x${string}` | ''
+  const helperAllowance = useAllowance({
+    token: quoteToken,
+    owner: address,
+    spender: helper,
+    enabled: fixOffered,
   })
 
   const { data: quoteBalance } = useReadContract({
@@ -155,7 +165,13 @@ export function TradePanel({ token }: { token: TokenDetail }) {
   const outDecimals = side === 'buy' ? 18 : env.quoteDecimals
   const outSymbol = side === 'buy' ? symbol : env.quoteSymbol
 
-  const needsApproval = side === 'buy' && (allowance ?? 0n) < parsedAmount
+  const flow = deriveApprovalFlow({
+    allowance: allowance.allowance,
+    due: parsedAmount,
+    syncing: allowance.syncing,
+    approveLabel: `Approve ${side === 'buy' ? env.quoteSymbol : symbol}`,
+    actLabel: side === 'buy' ? `Buy ${name}` : `Sell ${name}`,
+  })
 
   const parsedMaxFix = useMemo(() => {
     if (!maxFixInput || !/^\d*\.?\d*$/.test(maxFixInput)) return 0n
@@ -166,7 +182,13 @@ export function TradePanel({ token }: { token: TokenDetail }) {
     }
   }, [maxFixInput])
   const fixTotal = parsedAmount + parsedMaxFix
-  const helperNeedsApproval = (helperAllowance ?? 0n) < fixTotal
+  const fixFlow = deriveApprovalFlow({
+    allowance: helperAllowance.allowance,
+    due: fixTotal,
+    syncing: helperAllowance.syncing,
+    approveLabel: `Approve ${env.quoteSymbol} for the fix`,
+    actLabel: 'Fix the pool and buy',
+  })
   // eslint-disable-next-line money/no-number-on-money -- both sides are bigint base units
   const fixOverBalance = fixTotal > balance
 
@@ -194,13 +216,16 @@ export function TradePanel({ token }: { token: TokenDetail }) {
   }
 
   const submit = async () => {
-    if (needsApproval) {
-      await tx.execute({
-        address: env.quoteAddress as `0x${string}`,
+    if (flow.step === 'approve') {
+      setApprovedFor('curve')
+      const hash = await approveTx.execute({
+        address: spendToken as `0x${string}`,
         abi: erc20Abi,
         functionName: 'approve',
         args: [curve, parsedAmount],
       })
+      // Re-read until the chain agrees; the button becomes Buy/Sell by itself.
+      if (hash) await allowance.awaitAtLeast(parsedAmount)
       return
     }
 
@@ -213,18 +238,19 @@ export function TradePanel({ token }: { token: TokenDetail }) {
   }
 
   const fixAndBuy = async () => {
-    if (helperNeedsApproval) {
-      const hash = await tx.execute({
-        address: env.quoteAddress as `0x${string}`,
+    if (fixFlow.step === 'approve') {
+      setApprovedFor('helper')
+      const hash = await approveTx.execute({
+        address: quoteToken as `0x${string}`,
         abi: erc20Abi,
         functionName: 'approve',
-        args: [helper, fixTotal],
+        args: [helper as `0x${string}`, fixTotal],
       })
-      if (hash) await refetchHelperAllowance()
+      if (hash) await helperAllowance.awaitAtLeast(fixTotal)
       return
     }
     await tx.execute({
-      address: helper,
+      address: helper as `0x${string}`,
       abi: graduationHelperAbi,
       functionName: 'fixAndBuy',
       args: [curve, parsedAmount, minOut, tradeDeadline(), parsedMaxFix],
@@ -396,23 +422,26 @@ export function TradePanel({ token }: { token: TokenDetail }) {
           variant="primary"
           size="lg"
           className="mt-4 w-full"
-          disabled={parsedAmount === 0n || overBalance || tx.isBusy}
+          disabled={parsedAmount === 0n || overBalance || tx.isBusy || approveTx.isBusy || flow.waiting}
           onClick={() => void submit()}
         >
-          {tx.isBusy
-            ? 'Working…'
-            : parsedAmount === 0n
-              ? 'Enter amount'
-              : needsApproval
-                ? `Approve ${env.quoteSymbol}`
-                : side === 'buy'
-                  ? `Buy ${name}`
-                  : `Sell ${name}`}
+          {tx.isBusy || approveTx.isBusy ? 'Working…' : parsedAmount === 0n ? 'Enter amount' : flow.label}
         </Button>
       ) : (
         <ConnectButton variant="primary" size="lg" className="mt-4 w-full" label="Connect wallet to trade" />
       )}
 
+      {isConnected && parsedAmount > 0n && (
+        <TxSteps
+          steps={flow.steps}
+          hashes={{ approve: approvedFor === 'curve' ? approveTx.hash : null }}
+          busyKey={approveTx.isBusy || flow.waiting ? 'approve' : tx.isBusy ? 'act' : null}
+          className="mt-3"
+        />
+      )}
+      {/* The ticked step reports a confirmed approval; a green strip under the
+          trade button would read as "done" for a trade that has not happened. */}
+      {approveTx.state !== 'confirmed' && <TxStatus tx={approveTx} className="mt-3" />}
       <TxStatus tx={tx} className="mt-3" />
 
       {fixOffered && side === 'buy' && tx.state !== 'confirmed' && (
@@ -444,15 +473,17 @@ export function TradePanel({ token }: { token: TokenDetail }) {
             variant="primary"
             size="lg"
             className="mt-3 w-full"
-            disabled={parsedAmount === 0n || fixOverBalance || tx.isBusy}
+            disabled={parsedAmount === 0n || fixOverBalance || tx.isBusy || approveTx.isBusy || fixFlow.waiting}
             onClick={() => void fixAndBuy()}
           >
-            {tx.isBusy
-              ? 'Working…'
-              : helperNeedsApproval
-                ? `Approve ${env.quoteSymbol} for the fix`
-                : 'Fix the pool and buy'}
+            {tx.isBusy || approveTx.isBusy ? 'Working…' : fixFlow.label}
           </Button>
+          <TxSteps
+            steps={fixFlow.steps}
+            hashes={{ approve: approvedFor === 'helper' ? approveTx.hash : null }}
+            busyKey={approveTx.isBusy || fixFlow.waiting ? 'approve' : tx.isBusy ? 'act' : null}
+            className="mt-3"
+          />
         </div>
       )}
     </Card>
