@@ -15,7 +15,7 @@ trading still works.
 |---|---|
 | `/` | Explore — search (⌘K), Graduated section, then every token still on the curve with sort / window / pagination |
 | `/t/:address` | Token page — about, fee terms, curve progress, risk flags, buy/sell, price + chart, trades / holders, creator + pool fee cards |
-| `/create` | Launch form — name, symbol, description, artwork (pinned via the API), links, optional dev buy, confirm dialog with every term read from the factory |
+| `/create` | Launch form — name, symbol, description, artwork (up to 10 MB picked; anything over the API's 1 MB pin limit is re-encoded in the browser by `lib/image-compress.ts` — canvas ≤1024², WebP/JPEG quality 0.9→0.5 then 1024→768→512, PNG kept for transparent logos when it fits, GIFs reduced to a still), links, optional dev buy, confirm dialog with every term read from the factory |
 | `/profile` · `/profile/:address` | Holdings, launches, activity; the wallet's own profile also lists claimable creator fees |
 | `/launchpad`, `/launchpad/new`, `/launchpad/:address` | Redirects from the launchpad's first life inside hoodium.app |
 

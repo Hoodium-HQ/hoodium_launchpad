@@ -6,13 +6,24 @@
 import { quoteBuy, type CurveState } from './curve'
 import { hasLinkLike } from './utils'
 import type { LaunchTerms } from './launchpad-api'
+import {
+  COMPRESS_TARGET_BYTES,
+  ImageCompressError,
+  PICK_MAX_BYTES,
+  compressImage,
+  type CompressOptions,
+  type CompressResult,
+} from './image-compress'
 
 export const NAME_MAX = 32
 export const SYMBOL_MAX = 10
 export const DESCRIPTION_MAX = 256
 
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const
-export const IMAGE_MAX_BYTES = 1024 * 1024
+/** What the pinning route accepts. Anything picked above this is compressed to fit. */
+export const IMAGE_MAX_BYTES = COMPRESS_TARGET_BYTES
+/** The largest file the picker takes at all. */
+export const IMAGE_PICK_MAX_BYTES = PICK_MAX_BYTES
 
 /** Letters, numbers and spaces. No punctuation, which is where lookalikes hide. */
 export function isValidName(value: string): boolean {
@@ -95,29 +106,33 @@ export interface PickedImage {
   contentType: string
   /** Object URL for the preview. The caller revokes it. */
   previewUrl: string
+  /** Size of what will be uploaded. */
   bytes: number
+  /** Size of the file that was picked — differs from `bytes` when compressed. */
+  originalBytes: number
+  width: number
+  height: number
+  /** True when the upload is a re-encoding rather than the picked file. */
+  compressed: boolean
+  /** Something to tell the creator about the conversion, e.g. a dropped animation. */
+  note: string | null
 }
 
 export class ImageRejected extends Error {}
 
-/**
- * Read one picked file into the shape the pinning route takes.
- *
- * The type and size are checked here as well as on the server. This copy exists
- * to give an answer before a megabyte crosses the network; the server's copy is
- * the one that is load-bearing, and it verifies magic bytes rather than trusting
- * the browser's guess at a type.
- */
-export async function readImageFile(file: File): Promise<PickedImage> {
-  if (!(IMAGE_TYPES as readonly string[]).includes(file.type)) {
-    throw new ImageRejected('Choose a PNG, JPEG, WebP or GIF.')
-  }
-  if (file.size === 0 || file.size > IMAGE_MAX_BYTES) {
-    throw new ImageRejected('Artwork must be under 1 MB.')
-  }
+function readArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
+  // `Blob.arrayBuffer` is missing in older Safari and in jsdom; FileReader is everywhere.
+  if (typeof blob.arrayBuffer === 'function') return blob.arrayBuffer()
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as ArrayBuffer)
+    reader.onerror = () => reject(reader.error ?? new Error('read failed'))
+    reader.readAsArrayBuffer(blob)
+  })
+}
 
-  const buffer = await file.arrayBuffer()
-  const bytes = new Uint8Array(buffer)
+export async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await readArrayBuffer(blob))
 
   // Chunked rather than `String.fromCharCode(...bytes)`: spreading a megabyte
   // into an argument list overflows the call stack in every engine.
@@ -126,11 +141,57 @@ export async function readImageFile(file: File): Promise<PickedImage> {
   for (let i = 0; i < bytes.length; i += CHUNK) {
     binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
   }
+  return btoa(binary)
+}
+
+export interface ReadImageOptions {
+  /** Replaces the canvas compressor — tests, mostly. */
+  compress?: (file: File, opts: CompressOptions) => Promise<CompressResult>
+}
+
+/**
+ * Read one picked file into the shape the pinning route takes, compressing it
+ * first when it is over the route's limit.
+ *
+ * The type and the 10 MB pick ceiling are checked here as well as on the
+ * server. This copy exists to give an answer before megabytes cross the network;
+ * the server's copy is the one that is load-bearing, and it verifies magic
+ * bytes rather than trusting the browser's guess at a type.
+ */
+export async function readImageFile(file: File, opts: ReadImageOptions = {}): Promise<PickedImage> {
+  if (!(IMAGE_TYPES as readonly string[]).includes(file.type)) {
+    throw new ImageRejected(
+      file.type === 'image/svg+xml' ? 'SVG artwork is not accepted. Export it as a PNG or WebP.' : 'Choose a PNG, JPEG, WebP or GIF.',
+    )
+  }
+  if (file.size === 0) {
+    throw new ImageRejected('That file is empty.')
+  }
+  if (file.size > IMAGE_PICK_MAX_BYTES) {
+    throw new ImageRejected('Artwork must be under 10 MB.')
+  }
+
+  let result: CompressResult
+  try {
+    result = await (opts.compress ?? compressImage)(file, { targetBytes: IMAGE_MAX_BYTES })
+  } catch (err) {
+    throw new ImageRejected(
+      err instanceof ImageCompressError ? err.message : 'That image could not be compressed. Try a smaller file.',
+    )
+  }
+  if (result.bytes > IMAGE_MAX_BYTES) {
+    throw new ImageRejected('That image could not be made small enough. Try a smaller or simpler picture.')
+  }
 
   return {
-    data: btoa(binary),
-    contentType: file.type,
-    previewUrl: URL.createObjectURL(file),
-    bytes: file.size,
+    data: await blobToBase64(result.blob),
+    contentType: result.contentType,
+    previewUrl: URL.createObjectURL(result.blob),
+    bytes: result.bytes,
+    originalBytes: result.originalBytes,
+    width: result.width,
+    height: result.height,
+    compressed: result.changed,
+    note: result.note,
   }
 }

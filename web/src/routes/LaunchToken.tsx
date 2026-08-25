@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronDown, ImageIcon } from 'lucide-react'
+import { ArrowLeft, ChevronDown, ImageIcon, Loader2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { formatUnits, parseUnits } from 'viem'
@@ -30,6 +30,7 @@ import {
   readImageFile,
   type PickedImage,
 } from '@/lib/launch-form'
+import { formatBytes } from '@/lib/image-compress'
 import { formatAmount, fromBaseUnits } from '@/lib/money'
 import { cn, hasConfusableCharacters } from '@/lib/utils'
 
@@ -78,6 +79,8 @@ export function LaunchToken() {
 
   const [image, setImage] = useState<PickedImage | null>(null)
   const [imageError, setImageError] = useState<string | null>(null)
+  /** Compressing a large pick. The previous preview stays up until it finishes. */
+  const [imageBusy, setImageBusy] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   /** Set once the metadata URI exists; the confirmation dialog opens on it. */
@@ -177,7 +180,10 @@ export function LaunchToken() {
   const pickImage = async (file: File | undefined) => {
     if (!file) return
     setImageError(null)
+    setImageBusy(true)
     try {
+      // Anything over the pin limit is re-encoded in the browser first; the
+      // existing preview is left alone until the replacement is ready.
       const picked = await readImageFile(file)
       setImage((previous) => {
         if (previous) URL.revokeObjectURL(previous.previewUrl)
@@ -185,6 +191,11 @@ export function LaunchToken() {
       })
     } catch (err) {
       setImageError(err instanceof ImageRejected ? err.message : 'That file could not be read.')
+    } finally {
+      setImageBusy(false)
+      // Same file picked twice should run again, and an <input type=file>
+      // does not fire change for an unchanged value.
+      if (fileRef.current) fileRef.current.value = ''
     }
   }
 
@@ -361,6 +372,8 @@ export function LaunchToken() {
                 <button
                   type="button"
                   onClick={() => fileRef.current?.click()}
+                  disabled={imageBusy}
+                  aria-busy={imageBusy}
                   className={cn(
                     'mt-2 flex w-full items-center gap-3 rounded-xl border border-border bg-background p-3 text-left',
                     'transition-colors duration-[120ms] hover:border-primary/40',
@@ -370,18 +383,36 @@ export function LaunchToken() {
                   <span className="grid size-11 shrink-0 place-items-center overflow-hidden rounded-lg bg-muted">
                     {image ? (
                       <img src={image.previewUrl} alt="" className="size-full object-cover" />
+                    ) : imageBusy ? (
+                      <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden />
                     ) : (
                       <ImageIcon className="size-4 text-muted-foreground" aria-hidden />
                     )}
                   </span>
                   <span className="min-w-0">
-                    <span className="block text-sm">{image ? 'Image ready' : 'Choose image'}</span>
+                    <span className="block text-sm">
+                      {imageBusy ? 'Preparing image…' : image ? 'Image ready' : 'Choose image'}
+                    </span>
                     <span className="num block text-label text-muted-foreground">
-                      {image ? `${(image.bytes / 1024).toFixed(0)} KB` : 'PNG, JPEG, WebP or GIF · 1 MB max'}
+                      {imageBusy
+                        ? 'Compressing to fit the 1 MB upload limit'
+                        : image
+                          ? formatBytes(image.bytes)
+                          : 'PNG, JPEG, WebP or GIF · up to 10 MB, compressed to 1 MB'}
                     </span>
                   </span>
+                  {imageBusy && image && (
+                    <Loader2 className="ml-auto size-4 shrink-0 animate-spin text-muted-foreground" aria-hidden />
+                  )}
                 </button>
 
+                {image?.compressed && !imageBusy && (
+                  <span className="num mt-1 block text-label text-muted-foreground">
+                    Compressed from {formatBytes(image.originalBytes)} to {formatBytes(image.bytes)}
+                    {image.width > 0 && image.height > 0 ? ` (${image.width}×${image.height})` : ''}
+                  </span>
+                )}
+                {image?.note && !imageBusy && <Warning>{image.note}</Warning>}
                 {imageError && <Warning>{imageError}</Warning>}
               </>
             ) : (

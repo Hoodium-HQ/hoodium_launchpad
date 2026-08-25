@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseIpfsPath, website } from '../src/services/ipfs.js'
-import { sniffImageType } from '../src/services/pinata.js'
+import { MAX_IMAGE_UPLOAD_BYTES, sniffImageType } from '../src/services/pinata.js'
 import { buildFlags, sharePct } from '../src/services/risk.js'
 import { bps, pricePerToken, toUnits, valueOf } from '../src/lib/amounts.js'
 
@@ -42,6 +42,14 @@ describe('sniffImageType', () => {
     expect(sniffImageType(png, 'image/jpeg')).toBeNull()
     expect(sniffImageType(Buffer.from('<html>hello world</html>'), 'image/png')).toBeNull()
     expect(sniffImageType(png, 'image/svg+xml')).toBeNull()
+  })
+  it('accepts WebP — the format the launch form compresses to', () => {
+    const webp = Buffer.concat([Buffer.from('RIFF', 'latin1'), Buffer.alloc(4), Buffer.from('WEBPVP8 ', 'latin1'), Buffer.alloc(8)])
+    expect(sniffImageType(webp, 'image/webp')).toBe('image/webp')
+    expect(sniffImageType(webp, 'image/png')).toBeNull()
+  })
+  it('the pin ceiling is at least the 1 MB the form compresses down to', () => {
+    expect(MAX_IMAGE_UPLOAD_BYTES).toBeGreaterThanOrEqual(1024 * 1024)
   })
 })
 
