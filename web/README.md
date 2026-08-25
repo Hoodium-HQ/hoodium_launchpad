@@ -75,6 +75,29 @@ npm run dev                 # http://localhost:5173
 
 `scripts/mock-api.mjs` serves the shapes in `src/lib/api-types.ts`.
 
+To screenshot a route without the contracts, build once with dummy chain
+identity (`VITE_CHAIN_ID`, `VITE_RPC_URL` and `VITE_REOWN_PROJECT_ID` are the
+three the build refuses to go without), then serve `dist` with the mock behind
+the same origin and drive headless Chromium at it:
+
+```sh
+# one container, host network: mock API on 8090, preview on 4173
+sudo docker run --rm --network host -v "$PWD":"$PWD" -w "$PWD" \
+  -e API_PROXY_TARGET=http://127.0.0.1:8090 node:22 bash -c \
+  "PORT=8090 node scripts/mock-api.mjs & npx vite preview --port 4173 --host 127.0.0.1"
+
+# a second container drives it; puppeteer resolves from /home/pptruser
+sudo docker run --rm --network host -v /tmp/shots:/out \
+  --entrypoint bash ghcr.io/puppeteer/puppeteer:latest \
+  -c "cp /out/shot.mjs /home/pptruser/ && cd /home/pptruser && node shot.mjs"
+```
+
+Build with `VITE_API_URL` pointing at the preview origin so `/api` rides the
+preview proxy and the CSP stays same-origin. Point `API_PROXY_TARGET` at a dead
+port instead of the mock to render the deploy defaults — which is how the Learn
+page looks before the factory answers. The output directory must be
+world-writable; `pptruser` is not uid 1000.
+
 ## The API contract
 
 `src/lib/api-types.ts` is a **verbatim copy** of `../api/src/types.ts` — the

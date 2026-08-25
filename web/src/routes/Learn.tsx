@@ -2,6 +2,7 @@ import { ArrowRight, ExternalLink, Plus } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Link } from 'react-router'
 import { Clipart, type ClipartName } from '@/components/Clipart'
+import { LifecycleDiagram, type LifecycleFigures } from '@/components/LifecycleDiagram'
 import { buttonVariants } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { env } from '@/config/env'
@@ -136,6 +137,26 @@ export function Learn() {
   const virtualUsdg = usdg(t.virtualUsdg)
   const lpAllocationCompact = tokens(t.lpAllocation, true)
 
+  /*
+   * The diagram is handed the same strings the cards print, so the picture and
+   * the prose cannot drift — and so the drawing tracks the live terms when the
+   * factory answers, exactly like every other figure on this page.
+   */
+  const figures: LifecycleFigures = {
+    creationFee,
+    devBuyMax,
+    snipeBlocks: t.snipeBlocks,
+    snipeMax,
+    tradeFee,
+    creatorShare,
+    hoodiumShare,
+    target,
+    lpAllocation: lpAllocationCompact,
+    lpCreatorShare,
+    lpProtocolShare,
+    quoteSymbol: env.quoteSymbol,
+  }
+
   return (
     <div className="space-y-10">
       {/* ── Hero ───────────────────────────────────────────────────────── */}
@@ -161,7 +182,11 @@ export function Learn() {
       </header>
 
       {/* ── Lifecycle ──────────────────────────────────────────────────── */}
-      <Section label="The lifecycle" blurb="Four stages. A token is always in exactly one of them.">
+      <Section
+        label="The lifecycle"
+        blurb="Four stages, three actors, and one transaction that does the whole handover."
+      >
+        <LifecycleDiagram figures={figures} className="mb-8" />
         <ol className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Step n={1} title="Launch" art="rocket">
             Pick a name, a symbol and an image; the image is pinned to IPFS. The creation fee is{' '}

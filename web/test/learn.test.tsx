@@ -67,6 +67,37 @@ describe('Learn', () => {
     }
   })
 
+  it('draws the lifecycle, with the flow available to a screen reader as words', () => {
+    const { container } = renderLearn()
+
+    /*
+     * Two drawings are in the DOM at once — the wide swimlanes and the compact
+     * column — and CSS, not React, picks which one a viewport sees. jsdom
+     * applies no stylesheet, so both are here; what matters is that each is an
+     * `img` carrying the same summary, so whichever one is displayed is named.
+     */
+    const drawn = screen.getAllByRole('img', { name: /Lifecycle of a token on Hoodium Launchpad/ })
+    expect(drawn).toHaveLength(2)
+    for (const svg of drawn) {
+      expect(svg.tagName.toLowerCase()).toBe('svg')
+      expect(svg.querySelector('title')?.textContent).toBe('How a token moves through Hoodium Launchpad')
+      expect(svg.querySelector('desc')?.textContent).toMatch(/locked forever/)
+    }
+
+    // The picture is not the only copy of the information.
+    const steps = container.querySelectorAll('ol.sr-only > li')
+    expect(steps).toHaveLength(7)
+    const words = Array.from(steps, (li) => li.textContent ?? '')
+    expect(words[0]).toMatch(/pinned to IPFS/)
+    expect(words[1]).toMatch(/capped at 5% of supply/)
+    expect(words[1]).toMatch(/1% per-address anti-snipe cap/)
+    expect(words[2]).toMatch(/USDG in, tokens out/)
+    expect(words[3]).toMatch(/70% to the creator/)
+    expect(words[4]).toMatch(/69,000 USDG raised/)
+    expect(words[5]).toMatch(/GraduationHelper\.fixAndBuy\(\)/)
+    expect(words[6]).toMatch(/no withdrawal path — this is irreversible/)
+  })
+
   it('sets the document title', () => {
     renderLearn()
     expect(document.title).toContain('How it works')
