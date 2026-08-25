@@ -356,3 +356,24 @@ production address and redeploy when you are done. Two caveats:
   test token's page looks more convincing that way, and it costs nothing but time.
 - **`TEST_TARGET_USDG` is capped at 100** so a typo cannot spend real money. Raise
   `TEST_TARGET_MAX_USDG` if you deliberately want a larger rehearsal.
+
+---
+
+## It was run — 2026-08-25, mainnet
+
+33 checks, 0 failures, and re-verified independently with `cast` afterwards.
+
+| | |
+| --- | --- |
+| factory (throwaway) | `0x4De8a67da48Dc443E61F2F6C952FdF38DA376B3b` |
+| token / curve | `0xc69156eeb1A1CEAfE79Afb78a8Fe1aeB4C6bf06D` / `0x1b950cab2a963e1c2bFAFd98609EE7aEccc0f3A3` |
+| pool (1% tier) | `0x73895BB6c2Cc13cbc9FEF19ceb075f00572EAFd6` — 3.000000 USDG and 200,000,000 tokens, liquidity 24494897427831780 |
+| locked position | tokenId `787921`, owner `0x727395E1fFDAF192AE44b323B9070464105a3024` (the locker), beneficiary the creator |
+| price | `slot0.sqrtPriceX96` == the curve's closing price, exactly — not within a band, equal |
+| fees | 30,304 raw split 21,212 creator / 9,092 vault |
+| cost | 3.030304 USDG, 0.000364 ETH of gas across both steps |
+
+One thing to know if you read the raw forge output: its per-transaction receipt
+list labels contracts by the wrong names (it called the FeeVault an LPLocker and
+back). The script's own printout is derived from the deployed instances and is
+correct; an on-chain read settles it either way.
