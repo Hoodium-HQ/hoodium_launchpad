@@ -114,6 +114,8 @@ contract ForkGraduationTest is Test {
                 tradeFeeBps: 100,
                 creatorFeeShareBps: 7_000,
                 creationFee: 0,
+                hdm: address(0),
+                hdmLaunchBurn: 0,
                 devBuyMaxBps: 500,
                 snipeBlocks: 3,
                 snipeMaxBps: 100

@@ -67,6 +67,8 @@ abstract contract BaseTest is Test {
         uint256 tradeFeeBps;
         uint256 creatorFeeShareBps;
         uint256 creationFee;
+        address hdm;
+        uint256 hdmLaunchBurn;
         uint256 devBuyMaxBps;
         uint256 snipeBlocks;
         uint256 snipeMaxBps;
@@ -142,6 +144,8 @@ abstract contract BaseTest is Test {
                 tradeFeeBps: t.tradeFeeBps,
                 creatorFeeShareBps: t.creatorFeeShareBps,
                 creationFee: t.creationFee,
+                hdm: t.hdm,
+                hdmLaunchBurn: t.hdmLaunchBurn,
                 devBuyMaxBps: t.devBuyMaxBps,
                 snipeBlocks: t.snipeBlocks,
                 snipeMaxBps: t.snipeMaxBps

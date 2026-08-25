@@ -112,6 +112,8 @@ contract Deploy is Script {
                 tradeFeeBps: p.tradeFeeBps,
                 creatorFeeShareBps: p.creatorFeeShareBps,
                 creationFee: p.creationFee,
+                hdm: address(0),
+                hdmLaunchBurn: 0,
                 devBuyMaxBps: p.devBuyMaxBps,
                 snipeBlocks: p.snipeBlocks,
                 snipeMaxBps: p.snipeMaxBps

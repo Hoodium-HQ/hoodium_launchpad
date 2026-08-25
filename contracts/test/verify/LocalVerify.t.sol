@@ -107,6 +107,8 @@ contract LocalVerifyTest is BaseTest {
                 tradeFeeBps: TRADE_FEE_BPS,
                 creatorFeeShareBps: CREATOR_SHARE_BPS,
                 creationFee: 0,
+                hdm: address(0),
+                hdmLaunchBurn: 0,
                 devBuyMaxBps: DEV_BUY_MAX_BPS,
                 snipeBlocks: SNIPE_BLOCKS,
                 snipeMaxBps: SNIPE_MAX_BPS

@@ -7,6 +7,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {BondingCurve} from "./BondingCurve.sol";
 import {HoodiumToken} from "./HoodiumToken.sol";
+import {IERC20Burnable} from "./interfaces/IERC20Burnable.sol";
 import {IGraduationManager} from "./interfaces/IGraduationManager.sol";
 
 /**
@@ -59,6 +60,24 @@ contract HoodiumFactory is ReentrancyGuard {
     uint256 public immutable tradeFeeBps;
     uint256 public immutable creatorFeeShareBps;
     uint256 public immutable creationFee; // LP-1.5, in USDG
+
+    /**
+     * @notice HDM, and the amount of it a creator burns to open a launch.
+     *
+     * @dev Zero address and zero amount until HDM exists, which is how this
+     *      factory shipped: the burn is opt-in at deployment, not a switch an
+     *      owner can flip on a live factory. A creator pays it with an
+     *      allowance, so the fee is visible in their wallet before they sign
+     *      and cannot be charged twice on one approval.
+     *
+     *      It is a burn rather than a transfer for the same reason the
+     *      graduation LP is locked rather than held: nobody, including the
+     *      team, should be able to spend what a launch cost. The supply simply
+     *      falls, and the token page's burn counter has a source that does not
+     *      depend on the buyback ever running.
+     */
+    address public immutable hdm;
+    uint256 public immutable hdmLaunchBurn;
     uint256 public immutable devBuyMaxBps; // LP-1.6, default 500 = 5%
     uint256 public immutable snipeBlocks; // LP-2.5, default 3
     uint256 public immutable snipeMaxBps; // LP-2.5, default 100 = 1%
@@ -89,6 +108,8 @@ contract HoodiumFactory is ReentrancyGuard {
         uint256 devBuyTokens
     );
 
+    event LaunchFeeBurned(address indexed creator, uint256 amount);
+
     error DevBuyTooLarge(uint256 requested, uint256 cap);
     error InsufficientCreationFee();
 
@@ -104,6 +125,8 @@ contract HoodiumFactory is ReentrancyGuard {
         uint256 tradeFeeBps;
         uint256 creatorFeeShareBps;
         uint256 creationFee;
+        address hdm;
+        uint256 hdmLaunchBurn;
         uint256 devBuyMaxBps;
         uint256 snipeBlocks;
         uint256 snipeMaxBps;
@@ -116,6 +139,7 @@ contract HoodiumFactory is ReentrancyGuard {
         require(c.graduationTarget > c.graduationFee, "fee >= target");
         require(c.tradeFeeBps < BPS && c.creatorFeeShareBps <= BPS, "bad bps");
         require(c.devBuyMaxBps <= BPS && c.snipeMaxBps <= BPS, "bad caps");
+        require(c.hdmLaunchBurn == 0 || c.hdm != address(0), "burn without hdm");
 
         usdg = IERC20(c.usdg);
         feeVault = c.feeVault;
@@ -130,6 +154,8 @@ contract HoodiumFactory is ReentrancyGuard {
         tradeFeeBps = c.tradeFeeBps;
         creatorFeeShareBps = c.creatorFeeShareBps;
         creationFee = c.creationFee;
+        hdm = c.hdm;
+        hdmLaunchBurn = c.hdmLaunchBurn;
         devBuyMaxBps = c.devBuyMaxBps;
         snipeBlocks = c.snipeBlocks;
         snipeMaxBps = c.snipeMaxBps;
@@ -212,6 +238,13 @@ contract HoodiumFactory is ReentrancyGuard {
 
         if (creationFee > 0) {
             usdg.safeTransferFrom(msg.sender, feeVault, creationFee);
+        }
+
+        // Burned before the dev buy, so a launch that reverts later never
+        // destroys anyone's HDM, and one that succeeds always did.
+        if (hdmLaunchBurn > 0) {
+            IERC20Burnable(hdm).burnFrom(msg.sender, hdmLaunchBurn);
+            emit LaunchFeeBurned(msg.sender, hdmLaunchBurn);
         }
 
         (uint256 devBuySpent, uint256 devBuyTokens) = _devBuy(curveAddress, devBuyUsdg, devBuyMinTokens);

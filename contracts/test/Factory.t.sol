@@ -306,6 +306,8 @@ contract FactoryTest is BaseTest {
                 tradeFeeBps: t.tradeFeeBps,
                 creatorFeeShareBps: t.creatorFeeShareBps,
                 creationFee: t.creationFee,
+                hdm: address(0),
+                hdmLaunchBurn: 0,
                 devBuyMaxBps: t.devBuyMaxBps,
                 snipeBlocks: t.snipeBlocks,
                 snipeMaxBps: t.snipeMaxBps
@@ -331,6 +333,8 @@ contract FactoryTest is BaseTest {
                 tradeFeeBps: t.tradeFeeBps,
                 creatorFeeShareBps: t.creatorFeeShareBps,
                 creationFee: t.creationFee,
+                hdm: address(0),
+                hdmLaunchBurn: 0,
                 devBuyMaxBps: t.devBuyMaxBps,
                 snipeBlocks: t.snipeBlocks,
                 snipeMaxBps: t.snipeMaxBps

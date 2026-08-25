@@ -117,6 +117,8 @@ contract DeployLocal is Script {
                 tradeFeeBps: 100, // 1% (LP-2.3)
                 creatorFeeShareBps: 7_000, // 70% of fees to the creator (LP-3.1)
                 creationFee: 1 * usdgUnit, // LP-1.5, ~0.0005 ETH in USDG terms
+                hdm: address(0),
+                hdmLaunchBurn: 0,
                 devBuyMaxBps: 500, // 5% of supply (LP-1.6)
                 snipeBlocks: 3, // LP-2.5
                 snipeMaxBps: 100 // 1% of supply per tx in the window
