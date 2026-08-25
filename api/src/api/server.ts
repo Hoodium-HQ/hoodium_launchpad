@@ -8,6 +8,7 @@ import { isPinningEnabled } from '../services/pinata.js'
 import type { ConfigResponse, HealthResponse } from '../types.js'
 import { terms, type AppContext } from './context.js'
 import { registerProfileRoutes } from './routes/profile.js'
+import { registerRevenueRoutes } from './routes/revenue.js'
 import { registerTokenRoutes } from './routes/tokens.js'
 import { registerWriteRoutes } from './routes/writes.js'
 
@@ -97,6 +98,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   await registerTokenRoutes(app, ctx)
   await registerProfileRoutes(app, ctx)
   await registerWriteRoutes(app, ctx)
+  await registerRevenueRoutes(app, ctx)
 
   return app
 }
