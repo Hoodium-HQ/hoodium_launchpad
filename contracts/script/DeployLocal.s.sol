@@ -1,0 +1,135 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.28;
+
+import {Script} from "forge-std/Script.sol";
+import {console2} from "forge-std/console2.sol";
+import {FeeVault} from "../src/FeeVault.sol";
+import {GraduationManager} from "../src/GraduationManager.sol";
+import {HoodiumFactory} from "../src/HoodiumFactory.sol";
+import {LPLocker} from "../src/LPLocker.sol";
+import {MockUSDG} from "../test/mocks/MockUSDG.sol";
+import {MockUniswapFactory, MockPositionManager} from "../test/mocks/MockUniswap.sol";
+
+/**
+ * Local-only deployment — the whole launchpad on a bare Anvil, from nothing.
+ *
+ * `Deploy.s.sol` assumes USDG and Uniswap already exist on the chain, which is
+ * true of mainnet and false of a fresh `anvil`. This script deploys stand-ins for
+ * both first, so a developer can go from an empty node to a working launch form
+ * in one command:
+ *
+ *   anvil
+ *   forge script script/DeployLocal.s.sol --rpc-url http://127.0.0.1:8545 --broadcast
+ *
+ * It refuses to run anywhere except chain 31337. The mocks below are test doubles
+ * — MockPositionManager mints ERC-721s that no real pool backs, and
+ * MockUniswapFactory's pools hold no liquidity — so a graduation here proves the
+ * call path works and nothing about the pool it would have created. On any real
+ * chain that is a lie about where users' liquidity went, which is why the guard
+ * is a `require` and not a comment.
+ *
+ * Parameters mirror `Deploy.s.sol` exactly. They are design.md section 2's
+ * placeholders, still blocked on T0.1 — a local chain that behaves differently
+ * from the deploy script it stands in for is worse than no local chain.
+ */
+contract DeployLocal is Script {
+    uint256 private constant ANVIL_CHAIN_ID = 31337;
+
+    /// Anvil's first deterministic account. Public knowledge, worthless anywhere real.
+    uint256 private constant ANVIL_KEY_0 = 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
+
+    function run() external {
+        require(
+            block.chainid == ANVIL_CHAIN_ID,
+            "DeployLocal is for Anvil (31337) only - it deploys mock USDG and mock Uniswap. Use Deploy.s.sol."
+        );
+
+        uint256 deployerKey = vm.envOr("PRIVATE_KEY", ANVIL_KEY_0);
+        address deployer = vm.addr(deployerKey);
+
+        // Optional: an address to fund with mock USDG, so the wallet you connect
+        // in the browser can actually buy on a curve. Defaults to the deployer,
+        // which is not the account MetaMask is holding.
+        address seedWallet = vm.envOr("SEED_WALLET", deployer);
+
+        uint256 usdgUnit = 1e6; // MockUSDG is 6 decimals, like mainnet USDG
+        uint256 tokenUnit = 1e18;
+
+        vm.startBroadcast(deployerKey);
+
+        // ── Stand-ins for what mainnet already has ───────────────────────────
+        MockUSDG usdg = new MockUSDG();
+        MockUniswapFactory uniswapFactory = new MockUniswapFactory();
+        MockPositionManager positionManager = new MockPositionManager();
+
+        usdg.mint(deployer, 10_000_000 * usdgUnit);
+        if (seedWallet != deployer) usdg.mint(seedWallet, 10_000_000 * usdgUnit);
+
+        // ── The launchpad itself, in dependency order ────────────────────────
+        // LP-3.5 — the vault is a multisig, never an EOA. Three signers, threshold
+        // 2, same shape the constructor enforces on mainnet.
+        address[] memory owners = new address[](3);
+        owners[0] = deployer;
+        owners[1] = vm.addr(uint256(keccak256("hoodium.local.signer.2")));
+        owners[2] = vm.addr(uint256(keccak256("hoodium.local.signer.3")));
+
+        FeeVault vault = new FeeVault(owners, 2);
+        // 30% of post-graduation pool fees to the protocol, 70% to the creator.
+        // Mirrors Deploy.s.sol so local behaviour matches what would ship.
+        LPLocker locker = new LPLocker(address(positionManager), address(vault), 3_000);
+        GraduationManager manager = new GraduationManager(
+            address(uniswapFactory),
+            address(positionManager),
+            address(locker),
+            address(usdg),
+            10_000, // 1% pool fee
+            200 // tick spacing for the 1% tier
+        );
+
+        HoodiumFactory factory = new HoodiumFactory(
+            HoodiumFactory.FactoryConfig({
+                usdg: address(usdg),
+                feeVault: address(vault),
+                graduationManager: address(manager),
+                tokenDecimals: 18,
+                totalSupply: 1_000_000_000 * tokenUnit,
+                curveAllocation: 800_000_000 * tokenUnit,
+                virtualUsdg: 12_000 * usdgUnit,
+                graduationTarget: 69_000 * usdgUnit,
+                graduationFee: 0, // LP-3.3 — the incumbent charges none
+                tradeFeeBps: 100, // 1% (LP-2.3)
+                creatorFeeShareBps: 7_000, // 70% of fees to the creator (LP-3.1)
+                creationFee: 1 * usdgUnit, // LP-1.5, ~0.0005 ETH in USDG terms
+                devBuyMaxBps: 500, // 5% of supply (LP-1.6)
+                snipeBlocks: 3, // LP-2.5
+                snipeMaxBps: 100 // 1% of supply per tx in the window
+            })
+        );
+
+        vm.stopBroadcast();
+
+        console2.log("");
+        console2.log("=== deployed ===");
+        console2.log("MockUSDG           ", address(usdg));
+        console2.log("MockUniswapFactory ", address(uniswapFactory));
+        console2.log("MockPositionManager", address(positionManager));
+        console2.log("FeeVault           ", address(vault));
+        console2.log("LPLocker           ", address(locker));
+        console2.log("GraduationManager  ", address(manager));
+        console2.log("HoodiumFactory     ", address(factory));
+        console2.log("");
+        console2.log("USDG funded        ", seedWallet);
+        console2.log("");
+        console2.log("=== hoodium_backend/.env ===");
+        console2.log("LAUNCHPAD_FACTORY_ADDRESS=%s", address(factory));
+        console2.log("QUOTE_TOKEN_ADDRESS=%s", address(usdg));
+        console2.log("POSITION_MANAGER_ADDRESS=%s", address(positionManager));
+        console2.log("UNISWAP_V3_FACTORY_ADDRESS=%s", address(uniswapFactory));
+        console2.log("");
+        console2.log("=== hoodium_frontend/.env ===");
+        console2.log("VITE_LAUNCHPAD_FACTORY=%s", address(factory));
+        console2.log("VITE_QUOTE_ADDRESS=%s", address(usdg));
+        console2.log("");
+        console2.log("Restart both dev servers after editing - neither reloads .env on its own.");
+    }
+}
