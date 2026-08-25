@@ -14,8 +14,8 @@ Target chain: **Robinhood Chain (chain id 4663, Arbitrum Orbit)**.
 |---|---|---|
 | 0 — Modelling | T0.1–T0.4 | **partly** — see Open items |
 | 1 — Contracts | T1.1–T1.12 | done |
-| 2 — Testing | T2.1–T2.3, T2.5–T2.9 | done — **146 tests, 10 fuzz properties, all passing** (2026-08-25, forge nightly, solc 0.8.28) |
-| 2 — Fork test | T2.4 | done — **8 tests** against the real Robinhood Chain Uniswap v3 (`ForkGraduation.t.sol`, needs `--fork-url`) |
+| 2 — Testing | T2.1–T2.3, T2.5–T2.9 | done — **168 tests, 10 fuzz properties, all passing** (2026-08-25, forge nightly, solc 0.8.28) |
+| 2 — Fork test | T2.4 | done — **19 tests** against the real Robinhood Chain Uniswap v3 (`ForkGraduation.t.sol`, `test/verify/ForkVerify.t.sol`, need `--fork-url`) |
 | 2 — Internal review | — | done — see `AUDIT.md`; every Critical/High/Medium finding fixed with a regression test |
 | 2 — Testnet soak | T2.10 | **not done** — 2 weeks of real launches |
 | 2 — **External audit** | T2.11 | **not done — blocks mainnet absolutely** |
@@ -29,7 +29,7 @@ make for them.
 ## Layout
 
 ```
-src/                 the six contracts + interfaces
+src/                 the six core contracts + GraduationHelper periphery + interfaces
 test/                Foundry suite (mocks for USDG and Uniswap v3)
 script/Deploy.s.sol  env-driven mainnet/testnet deploy (no hard-coded addresses)
 script/DeployLocal.s.sol  Anvil-only: deploys mock USDG + mock Uniswap first
@@ -54,6 +54,7 @@ GraduationManager    atomic migration; serves only the factory's curves   LP-4.1
   ├─ Uniswap v3 pool created (or re-priced / verified) + seeded full-range
   └─ LPLocker        holds the position; no withdrawal path         LP-4.3
 FeeVault             m-of-n multisig, 30-day proposals              LP-3.5
+GraduationHelper     periphery: fix a griefed pool price + completing buy, atomically (AUDIT residual)
 ```
 
 The three trust links point forward — the locker only accepts positions from the
@@ -71,8 +72,8 @@ IMG=ghcr.io/foundry-rs/foundry:latest
 RUN="sudo docker run --rm -e FOUNDRY_DISABLE_NIGHTLY_WARNING=1 -v $PWD:/w -w /w $IMG"
 
 $RUN "forge build"
-$RUN "forge test"                          # 146 tests, fuzz at 4096 runs (fork tests skipped)
-$RUN "forge test --match-contract ForkGraduation --fork-url https://rpc.mainnet.chain.robinhood.com -vv"
+$RUN "forge test"                          # 168 tests, fuzz at 4096 runs (fork tests skipped)
+$RUN "forge test --match-contract 'ForkGraduation|ForkVerify' --fork-url https://rpc.mainnet.chain.robinhood.com -vv"
 $RUN "FOUNDRY_PROFILE=ci forge test"       # fuzz at 20000 runs
 $RUN "FOUNDRY_PROFILE=deep forge test"     # fuzz at 200000 runs — before audit
 $RUN "sh script/export-abi.sh"             # refresh abi/*.json after a source change
@@ -88,7 +89,7 @@ With a local Foundry install, just run the quoted commands directly.
 
 `abi/*.json` holds the bare ABI array (not the full forge artifact) for:
 `HoodiumFactory`, `BondingCurve`, `LPLocker`, `FeeVault`, `HoodiumToken`,
-`GraduationManager`. Import them from `../api` and `../web` — e.g. with viem,
+`GraduationManager`, `GraduationHelper`. Import them from `../api` and `../web` — e.g. with viem,
 `import factoryAbi from '../../contracts/abi/HoodiumFactory.json'` and pass it as
 `abi`. Regenerate with `script/export-abi.sh` whenever `src/` changes and commit
 the result; the api/web must never be one ABI version behind the deployed bytecode.
@@ -146,8 +147,9 @@ Uniswap v3 factory is read from `positionManager.factory()` and USDG decimals fr
 `USDG.decimals()` unless overridden.
 
 The deployer needs a little native ETH on Robinhood Chain: the Anvil rehearsal
-estimated ~9M gas for the four deployments. **Send nothing else from the
-deployer while the script runs**: the locker and manager are constructed with
+estimated ~9M gas for the four core deployments, plus the `GraduationHelper`
+deployed after them (no pairing, so it does not enter the nonce arithmetic).
+**Send nothing else from the deployer while the script runs**: the locker and manager are constructed with
 the *precomputed* addresses of the manager and factory (deployer nonce +2 and
 +3), every constructor verifies the pairing, and the script asserts it again —
 an intervening transaction shifts the nonces and the run reverts before
@@ -184,7 +186,8 @@ forge verify-contract --chain-id 4663 --verifier blockscout \
   --verifier-url https://robinhoodchain.blockscout.com/api/ \
   --constructor-args $(cast abi-encode "constructor(address[],uint256)" "[0x..,0x..]" 2) \
   <FEEVAULT_ADDRESS> src/FeeVault.sol:FeeVault
-# repeat for LPLocker, GraduationManager, HoodiumFactory with their own args.
+# repeat for LPLocker, GraduationManager, HoodiumFactory with their own args;
+# GraduationHelper has no constructor args.
 ```
 
 `HoodiumToken` and `BondingCurve` are deployed per launch by the factory; verify
@@ -218,8 +221,13 @@ VITE_LAUNCHPAD_FACTORY=<HoodiumFactory>
 VITE_QUOTE_ADDRESS=0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168
 VITE_QUOTE_DECIMALS=6
 VITE_POSITION_MANAGER=0x73991a25c818bf1f1128deaab1492d45638de0d3
+VITE_GRADUATION_HELPER=<GraduationHelper>
 VITE_EXPLORER_URL=https://robinhoodchain.blockscout.com
 ```
+
+`VITE_GRADUATION_HELPER` is optional: without it the trade panel can only say
+"try again later" when a primed pool blocks the completing buy; with it, it
+offers the atomic fix-and-buy (see Decisions).
 
 (If the api package ends up using shorter names such as `LAUNCHPAD_FACTORY`, the
 values are the same; check `api/src/config` for the exact keys.)
@@ -309,6 +317,27 @@ within ~0.5% of the closing price or graduation reverts `PoolPriceManipulated`
 mint then requires 99% of both sides to go in. Before this a primed pool sent
 99.99% of the raise to the creator (AUDIT C1).
 
+**A griefed pool is fixed and completed in one transaction.** The band check
+above has a liveness residual: a full-range position of ~$1 of tokens and 1000
+wei of USDG at a hostile price is enough liquidity to make every plain
+completing buy revert `PoolPriceManipulated`, and because re-pricing and
+re-blocking both cost wei, fixing it in a separate transaction is a gas war
+the buyer can lose. `GraduationHelper` (permissionless, unowned, stateless —
+the reentrancy guard is its only storage — and holding nothing between calls)
+closes it: `fixAndBuy(curve, usdgIn, minTokensOut, deadline, maxFixUsdg)`
+swaps the pool to `GraduationManager.targetSqrtPriceX96(curve)` in whichever
+direction is needed, then makes the completing buy, and sends the bought
+tokens, all arbitrage proceeds and the unspent budget to the caller. If the
+token is too cheap the swap is funded with the caller's USDG (bounded by
+`maxFixUsdg`); if too expensive, the tokens the pool asks for are bought from
+the curve inside the swap callback — at the fair price, never enough to
+complete the curve — and sold into the position. `fix(curve, maxFixUsdg)`
+alone serves keepers. `buy` is keyed on `msg.sender`, so the helper refuses to
+run inside the anti-snipe window and is meant only for the completing buy.
+`GraduationHelperTest` and the `*helper*` tests in `ForkVerify.t.sol` prove it
+against the mocks and the real chain (a dust position costs ~0.1 USDG to fix,
+or is net profitable, depending on direction).
+
 **Only the factory's curves reach the manager, only the manager reaches the
 locker.** `migrate` requires `factory.curveOf(token) == msg.sender`; the locker
 requires `from == graduationManager`. Look-alike curves and forged positions
@@ -370,13 +399,17 @@ both token orderings), and reproduces the pre-initialised-pool attack to assert
 it no longer works there. It needs `--fork-url`; re-run it against the block you
 deploy at, and still graduate a throwaway token first.
 
-**5b. Residual: graduation can be delayed, not broken.**
+**5b. Residual: graduation can be delayed, not broken — closed by `GraduationHelper`.**
 A pool primed *with liquidity* at a hostile price (or an out-of-range position
 in the path between the primed price and the fair one) makes the completing buy
 revert until the price is back inside the band. Any such liquidity is a
 mispriced order against a known fair price — an arbitrage — so it clears as
-soon as anyone takes it; the attacker pays for the delay. Documented in
-`GraduationManager` and covered by `test_regression_prePrimedLiquidPool_blocksOnlyUntilArbitraged`.
+soon as anyone takes it; the attacker pays for the delay. With dust liquidity
+the arbitrage is worth less than gas, so `GraduationHelper.fixAndBuy` takes it
+and completes the curve atomically (see Decisions). Documented in
+`GraduationManager` and covered by
+`test_regression_prePrimedLiquidPool_blocksOnlyUntilArbitraged`,
+`GraduationHelperTest` and the fork `*helper*` tests.
 
 **6. T2.11 — no audit. This blocks mainnet absolutely per the original plan.**
 tasks.md: *"Book the audit slot before Phase 1 finishes, not after."* Phase 1 is

@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {Script} from "forge-std/Script.sol";
 import {console2} from "forge-std/console2.sol";
 import {FeeVault} from "../src/FeeVault.sol";
+import {GraduationHelper} from "../src/GraduationHelper.sol";
 import {GraduationManager} from "../src/GraduationManager.sol";
 import {HoodiumFactory} from "../src/HoodiumFactory.sol";
 import {LPLocker} from "../src/LPLocker.sol";
@@ -19,7 +20,11 @@ interface IPositionManagerFactory {
 /**
  * Deployment, in dependency order:
  *
- *   FeeVault → LPLocker → GraduationManager → HoodiumFactory
+ *   FeeVault → LPLocker → GraduationManager → HoodiumFactory → GraduationHelper
+ *
+ * The helper is stateless periphery with no pairing to anything (it reads the
+ * manager from each curve), deployed last so it cannot disturb the nonce
+ * arithmetic below.
  *
  * Two of the links point *forward*: the locker only accepts positions from the
  * manager, and the manager only serves curves of the factory (AUDIT M1), but
@@ -114,6 +119,11 @@ contract Deploy is Script {
         );
         require(address(factory) == predictedFactory, "factory address drifted from prediction");
 
+        // Closes the AUDIT liveness residual: atomic pool fix + completing buy.
+        // Permissionless, unowned, holds nothing; the web routes a buy here only
+        // when the plain buy's simulation reverts on the pool's price.
+        GraduationHelper helper = new GraduationHelper();
+
         vm.stopBroadcast();
 
         console2.log("");
@@ -122,6 +132,7 @@ contract Deploy is Script {
         console2.log("LPLocker          ", address(locker));
         console2.log("GraduationManager ", address(manager));
         console2.log("HoodiumFactory    ", address(factory));
+        console2.log("GraduationHelper  ", address(helper));
         console2.log("virtualUsdg       ", factory.virtualUsdg());
         console2.log("virtualTokens     ", factory.virtualTokens());
         console2.log("");
@@ -137,6 +148,7 @@ contract Deploy is Script {
         console2.log("VITE_QUOTE_ADDRESS=%s", p.usdg);
         console2.log("VITE_QUOTE_DECIMALS=%s", uint256(p.usdgDecimals));
         console2.log("VITE_POSITION_MANAGER=%s", p.positionManager);
+        console2.log("VITE_GRADUATION_HELPER=%s", address(helper));
     }
 
     function _load() internal view returns (Params memory p) {

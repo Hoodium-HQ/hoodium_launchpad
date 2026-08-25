@@ -5,9 +5,9 @@
 Every Critical, High and Medium finding below is **fixed**, each with a
 regression test that runs the original attack and asserts it now reverts or
 yields nothing. The Lows are fixed except L7, which is accepted and documented.
-Suite: **146 tests passing** (`forge test`, 8 fork tests skipped without an
-RPC) plus **8 fork tests passing** against the real Robinhood Chain Uniswap v3
-(`forge test --match-contract ForkGraduation --fork-url https://rpc.mainnet.chain.robinhood.com`).
+Suite: **168 tests passing** (`forge test`, 19 fork tests skipped without an
+RPC) plus **19 fork tests passing** against the real Robinhood Chain Uniswap v3
+(`forge test --match-contract 'ForkGraduation|ForkVerify' --fork-url https://rpc.mainnet.chain.robinhood.com`).
 
 | Finding | Status | Where | Regression tests |
 |---|---|---|---|
@@ -27,15 +27,19 @@ RPC) plus **8 fork tests passing** against the real Robinhood Chain Uniswap v3
 | Info: vacuous `test_reentry_intoGraduate_isBlocked` | **fixed** | Reentrancy hook now fires mid-migration (`armAfter`), the outer call must succeed | `ReentrancyTest`: `test_reentry_intoGraduate_isBlocked`, `test_reentry_intoBuy_duringGraduation_isBlocked`, `test_reentry_intoSell_duringGraduation_isBlocked` |
 | Info: price-blind mocks | **fixed** | `test/mocks/MockUniswap.sol` is price-aware (LiquidityAmounts full-range maths, zero-liquidity `swap`, in-range `liquidity`); the PoC mocks were unified into it | whole suite |
 
-**Residual, documented (not a defect):** a pool primed *with liquidity* at a
-hostile price — or an out-of-range position in the path between the primed
-price and the fair one — makes the completing buy revert
+**Residual, documented (not a defect) — closed by GraduationHelper (tests
+`GraduationHelperTest`, `test_verify_*helper*` on the fork):** a pool primed
+*with liquidity* at a hostile price — or an out-of-range position in the path
+between the primed price and the fair one — makes the completing buy revert
 (`PoolPriceManipulated` / `UnexpectedSwapPayment`) until the price is back
 inside the band. Such liquidity is a mispriced order against a known fair
 price, i.e. an arbitrage anyone can take, so graduation is delayed at the
-attacker's expense, never broken. Covered by
-`test_regression_prePrimedLiquidPool_blocksOnlyUntilArbitraged` and the two fork
-tests above; explained in `GraduationManager`'s header.
+attacker's expense, never broken; `GraduationHelper.fixAndBuy` takes that
+arbitrage and completes the curve in the same transaction, so it cannot even be
+delayed by a re-blocking race. Covered by
+`test_regression_prePrimedLiquidPool_blocksOnlyUntilArbitraged`, the two fork
+tests above and the helper's suite; explained in `GraduationManager`'s and
+`GraduationHelper`'s headers.
 
 **Also accepted:** the anti-snipe window is per *address*; splitting across
 addresses is still possible (each needs its own USDG and gets its own 1%).
@@ -48,16 +52,33 @@ reviewer attacked the new code specifically (re-price swap and callback, band
 vs fill floor in both token orderings on the real chain, auto-graduation
 reentrancy and gas, the per-address window, the derived reserves under fuzz,
 the precomputed pairing, dust/sweep/vault accounting). No Critical or High
-remain; 156 local + 16 fork tests pass (`test/verify/`). Two residuals:
+remain; 168 local + 19 fork tests pass (`test/verify/`, `test/GraduationHelper.t.sol`). Two residuals:
 
-- **Medium (liveness):** a full-range position of ~$1 of tokens and 1000 wei of
-  USDG at a hostile price makes `liquidity() != 0`, so every plain completing
-  `buy` reverts `PoolPriceManipulated`. Re-pricing through it is profitable for
-  whoever does it, but the amounts scale with the attacker's liquidity and can
-  be driven below gas cost, so it can persist until someone fixes atomically.
-  Proved `test_verify_dustFullRangePosition_griefsCompletingBuy_atomicFixWins`,
-  which also shows an atomic fix-then-buy wins deterministically. Closed by the
-  permissionless `GraduationHelper` (see below) and UI routing.
+- **Medium (liveness) — closed by `GraduationHelper`:** a full-range position
+  of ~$1 of tokens and 1000 wei of USDG at a hostile price makes
+  `liquidity() != 0`, so every plain completing `buy` reverts
+  `PoolPriceManipulated`. Re-pricing through it is profitable for whoever does
+  it, but the amounts scale with the attacker's liquidity and can be driven
+  below gas cost, so it can persist until someone fixes atomically. Proved
+  `test_verify_dustFullRangePosition_griefsCompletingBuy_atomicFixWins`, which
+  also shows an atomic fix-then-buy wins deterministically. Closed by
+  `src/GraduationHelper.sol` — permissionless, stateless, unowned periphery
+  whose `fixAndBuy` swaps the pool to `GraduationManager.targetSqrtPriceX96`
+  (a view added for it) and makes the completing buy in one transaction, with
+  every proceed and the unspent fix budget returned to the caller; `fix` alone
+  serves keepers. Tests: `GraduationHelperTest` (12, both token orderings and
+  both directions, budget bound, no-op/fresh-pool reverts, snipe-window refusal,
+  callback at rest) and on the fork
+  `test_verify_dustPosition_tokenCheap_helperFixAndBuyGraduates`,
+  `test_verify_dustPosition_tokenExpensive_helperBuysFromCurveInsideCallback`,
+  `test_verify_outOfRangeDust_helperFixSweepsIt_thenPlainBuyWorks` (a dust
+  position costs ~0.1 USDG to fix in the cheap direction and is net profitable
+  in the expensive one; sweeping out-of-range dust costs 3 wei). The web routes
+  a buy to the helper only when the plain buy's simulation reverts with
+  `PoolPriceManipulated` / `UnexpectedSwapPayment` / `RepriceFailed`. The
+  helper is out of the core trust surface (it holds nothing, is paired with
+  nothing, and `buy` is keyed on it as a plain caller); it still belongs in
+  the external audit's scope.
 - **Info:** the completing buy on a fresh pool costs ~5.6M gas (1.06M with a
   pre-existing pool). Wallets estimate this correctly; the UI must never
   hard-code a limit from a normal buy.

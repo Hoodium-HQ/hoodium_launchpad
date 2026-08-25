@@ -1,7 +1,7 @@
 /**
  * Contract ABIs — human-readable fragments regenerated from
  * `../contracts/abi/*.json` (HoodiumFactory, BondingCurve, LPLocker,
- * GraduationManager) after the 2026-08-25 security fix pass. Only what the app
+ * GraduationManager, GraduationHelper) after the 2026-08-25 security fix pass. Only what the app
  * calls or decodes is listed; the JSON files are the authority.
  *
  * Every action that moves money goes browser → chain directly, using these
@@ -132,6 +132,28 @@ export const graduationManagerAbi = parseAbi([
   'event DustPulled(address indexed asset, address indexed creator, uint256 amount)',
   'error PoolPriceManipulated(uint160 have, uint160 want)',
   'error UnexpectedSwapPayment(int256 amount0Delta, int256 amount1Delta)',
+  'error RepriceFailed(uint160 have, uint160 want)',
   'error ExcessiveDust(address asset, uint256 leftover, uint256 desired)',
   'error NothingToPull()',
+])
+
+/**
+ * `GraduationHelper` — permissionless periphery for the one buy a primed pool
+ * can block. `fixAndBuy` re-prices the pool through the hostile liquidity and
+ * makes the completing buy in the same transaction; everything it yields (the
+ * tokens, the arbitrage proceeds, the unspent `maxFixUsdg`) is sent back to the
+ * caller. The caller approves `usdgIn + maxFixUsdg` of USDG to the helper. It
+ * refuses to run inside the anti-snipe window (`SnipeWindowOpen`).
+ */
+export const graduationHelperAbi = parseAbi([
+  'function fixAndBuy(address curve, uint256 usdgIn, uint256 minTokensOut, uint256 deadline, uint256 maxFixUsdg) returns (uint256 tokensOut)',
+  'function fix(address curve, uint256 maxFixUsdg)',
+  'function status(address curve) view returns (address pool, uint160 current, uint160 target, bool needed)',
+  'event PoolFixed(address indexed curve, address indexed pool, uint160 fromSqrtPriceX96, uint160 toSqrtPriceX96, bool tokenIn)',
+  'error SnipeWindowOpen(uint256 opensAtBlock)',
+  'error ZeroAmount()',
+  'error NothingToFix()',
+  'error FixBudgetInsufficient(uint160 landed, uint160 target)',
+  'error FixBudgetExhausted(uint256 needed, uint256 available)',
+  'error UnexpectedSwapCallback()',
 ])

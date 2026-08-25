@@ -6,7 +6,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 mkdir -p abi
-for c in HoodiumFactory BondingCurve LPLocker FeeVault HoodiumToken GraduationManager; do
+for c in HoodiumFactory BondingCurve LPLocker FeeVault HoodiumToken GraduationManager GraduationHelper; do
   if command -v jq >/dev/null 2>&1; then
     jq '.abi' "out/$c.sol/$c.json" > "abi/$c.json"
   else

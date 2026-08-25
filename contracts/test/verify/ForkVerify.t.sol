@@ -5,6 +5,7 @@ import {Test, console2} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {BondingCurve} from "../../src/BondingCurve.sol";
+import {GraduationHelper} from "../../src/GraduationHelper.sol";
 import {GraduationManager} from "../../src/GraduationManager.sol";
 import {HoodiumFactory} from "../../src/HoodiumFactory.sol";
 import {HoodiumToken} from "../../src/HoodiumToken.sol";
@@ -271,6 +272,146 @@ contract ForkVerifyTest is Test {
         console2.log("price after re-block / fair (1e6 scale)", uint256(now_) * 1e6 / uint256(fair));
         assertLt(uint256(now_), Math.mulDiv(fair, 9_975, 10_000), "re-block leaves the price below the band");
         _expectCompleteReverts(curve, GraduationManager.PoolPriceManipulated.selector);
+    }
+
+    // ── The residual, closed: GraduationHelper on the real pool ──────────────
+
+    function _helperFixAndBuy(BondingCurve curve, address who, uint256 usdgIn, uint256 maxFix)
+        internal
+        returns (GraduationHelper helper, uint256 out)
+    {
+        helper = new GraduationHelper();
+        deal(USDG, who, IERC20(USDG).balanceOf(who) + usdgIn + maxFix, false);
+        vm.startPrank(who);
+        IERC20(USDG).approve(address(helper), usdgIn + maxFix);
+        out = helper.fixAndBuy(address(curve), usdgIn, 0, block.timestamp, maxFix);
+        vm.stopPrank();
+    }
+
+    /// Same griefing position as above, token 10,000x too cheap: the helper
+    /// buys the attacker's tokens up to the fair price with the buyer's USDG
+    /// and completes the curve in the same transaction.
+    function test_verify_dustPosition_tokenCheap_helperFixAndBuyGraduates() public onFork {
+        (HoodiumToken token, BondingCurve curve) = _launchOrdered(true);
+        uint256 attackerTokens = _buy(curve, attacker, 1 * USDG_UNIT);
+        _fillAlmost(curve);
+        uint160 fair = _fair(curve);
+        address pool = _prime(address(token), uint160(fair / 100));
+        _attackerFullRangeMint(token, attackerTokens, 1_000);
+        _expectCompleteReverts(curve, GraduationManager.PoolPriceManipulated.selector);
+
+        assertEq(manager.targetSqrtPriceX96(address(curve)), fair, "manager view agrees with the test's fair price");
+        _assertHelperCheapDirection(token, curve, pool);
+    }
+
+    function _assertHelperCheapDirection(HoodiumToken token, BondingCurve curve, address pool) internal {
+        uint256 usdgIn = 500 * USDG_UNIT;
+        uint256 maxFix = 5 * USDG_UNIT;
+        (,, uint256 refund,) = curve.quoteBuy(usdgIn);
+        uint256 usdgBefore = IERC20(USDG).balanceOf(alice);
+        uint256 tokensBefore = token.balanceOf(alice);
+        (GraduationHelper helper, uint256 out) = _helperFixAndBuy(curve, alice, usdgIn, maxFix);
+
+        assertTrue(curve.graduated(), "helper fix+buy graduates");
+        assertEq(curve.pool(), pool);
+        assertGt(out, 0);
+        assertGt(token.balanceOf(alice) - tokensBefore, out, "arbitrage tokens came back to the buyer");
+        uint256 spent = usdgBefore + usdgIn + maxFix - IERC20(USDG).balanceOf(alice);
+        console2.log("helper fix+buy: USDG wei spent beyond the buy", spent - (usdgIn - refund));
+        assertLe(spent, usdgIn + maxFix);
+        assertLt(spent - (usdgIn - refund), 1 * USDG_UNIT, "fixing a dust position costs less than 1 USDG");
+        assertEq(IERC20(USDG).balanceOf(address(helper)), 0, "helper holds no USDG");
+        assertEq(token.balanceOf(address(helper)), 0, "helper holds no tokens");
+        assertGe(IERC20(USDG).balanceOf(pool), curve.graduationTarget() * 99 / 100);
+        assertEq(INonfungiblePositionManager(PM).ownerOf(curve.lpTokenId()), address(locker));
+    }
+
+    /// Token 10,000x too expensive: the pool asks for tokens in the callback,
+    /// the helper buys exactly that many from the curve (non-completing, at the
+    /// fair price) and sells them into the position. The pool's USDG comes back
+    /// to the buyer.
+    function test_verify_dustPosition_tokenExpensive_helperBuysFromCurveInsideCallback() public onFork {
+        (HoodiumToken token, BondingCurve curve) = _launchOrdered(true);
+        uint256 attackerTokens = _buy(curve, attacker, 1 * USDG_UNIT);
+        _fillAlmost(curve);
+        uint160 fair = _fair(curve);
+        address pool = _prime(address(token), uint160(fair * 100));
+        (,, uint128 liq) = _attackerFullRangeMint(token, attackerTokens, 1_000);
+        assertGt(liq, 0);
+        _expectCompleteReverts(curve, GraduationManager.PoolPriceManipulated.selector);
+
+        _assertHelperExpensiveDirection(token, curve, pool);
+    }
+
+    function _assertHelperExpensiveDirection(HoodiumToken token, BondingCurve curve, address pool) internal {
+        uint256 usdgIn = 500 * USDG_UNIT;
+        uint256 maxFix = 5 * USDG_UNIT;
+        (,, uint256 refund,) = curve.quoteBuy(usdgIn);
+        uint256 usdgBefore = IERC20(USDG).balanceOf(alice);
+        (GraduationHelper helper,) = _helperFixAndBuy(curve, alice, usdgIn, maxFix);
+
+        assertTrue(curve.graduated(), "helper fix+buy graduates");
+        assertEq(curve.pool(), pool);
+        int256 spent = int256(usdgBefore + usdgIn + maxFix) - int256(IERC20(USDG).balanceOf(alice));
+        int256 fixCost = spent - int256(usdgIn - refund);
+        console2.log("helper fix (token in): USDG wei net cost (negative = profit)", fixCost);
+        assertLt(fixCost, int256(maxFix));
+        assertEq(IERC20(USDG).balanceOf(address(helper)), 0);
+        assertEq(token.balanceOf(address(helper)), 0);
+        assertEq(INonfungiblePositionManager(PM).ownerOf(curve.lpTokenId()), address(locker));
+    }
+
+    /// Out-of-range dust in the path (`UnexpectedSwapPayment` from the manager's
+    /// free re-price): `fix` alone sweeps it for wei and pays the keeper.
+    function test_verify_outOfRangeDust_helperFixSweepsIt_thenPlainBuyWorks() public onFork {
+        (HoodiumToken token, BondingCurve curve) = _launchOrdered(true);
+        uint256 attackerTokens = _buy(curve, attacker, 1 * USDG_UNIT);
+        _fillAlmost(curve);
+        uint160 fair = _fair(curve);
+        address pool = _prime(address(token), uint160(fair / 100));
+        (, int24 tick,,,,,) = IUniswapV3Pool(pool).slot0();
+        int24 lower = ((tick / TICK_SPACING) + 2) * TICK_SPACING;
+        vm.startPrank(attacker);
+        token.approve(PM, type(uint256).max);
+        INonfungiblePositionManager(PM).mint(
+            INonfungiblePositionManager.MintParams({
+                token0: address(token),
+                token1: USDG,
+                fee: POOL_FEE,
+                tickLower: lower,
+                tickUpper: lower + TICK_SPACING,
+                amount0Desired: attackerTokens / 1000,
+                amount1Desired: 0,
+                amount0Min: 0,
+                amount1Min: 0,
+                recipient: attacker,
+                deadline: block.timestamp
+            })
+        );
+        vm.stopPrank();
+        _expectCompleteReverts(curve, GraduationManager.UnexpectedSwapPayment.selector);
+
+        GraduationHelper helper = new GraduationHelper();
+        (,,, bool needed) = helper.status(address(curve));
+        assertTrue(needed, "zero in-range liquidity off the target is reported as fixable");
+        address keeper = makeAddr("keeper");
+        deal(USDG, keeper, 1 * USDG_UNIT, false);
+        vm.startPrank(keeper);
+        IERC20(USDG).approve(address(helper), 1 * USDG_UNIT);
+        helper.fix(address(curve), 1 * USDG_UNIT);
+        vm.stopPrank();
+        (uint160 now_,,,,,,) = IUniswapV3Pool(pool).slot0();
+        assertEq(now_, fair, "fix lands exactly on the target");
+        console2.log("keeper paid USDG wei", 1 * USDG_UNIT - IERC20(USDG).balanceOf(keeper));
+        assertGt(token.balanceOf(keeper), 0, "keeper keeps the swept tokens");
+        assertEq(IERC20(USDG).balanceOf(address(helper)), 0);
+        assertEq(token.balanceOf(address(helper)), 0);
+
+        vm.expectRevert(GraduationHelper.NothingToFix.selector);
+        helper.fix(address(curve), 0);
+
+        _buy(curve, alice, 500 * USDG_UNIT);
+        assertTrue(curve.graduated());
     }
 
     // ── Q2: fill ratio at the band edge — is 99% too tight? ──────────────────

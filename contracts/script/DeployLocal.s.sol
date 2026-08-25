@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {Script} from "forge-std/Script.sol";
 import {console2} from "forge-std/console2.sol";
 import {FeeVault} from "../src/FeeVault.sol";
+import {GraduationHelper} from "../src/GraduationHelper.sol";
 import {GraduationManager} from "../src/GraduationManager.sol";
 import {HoodiumFactory} from "../src/HoodiumFactory.sol";
 import {LPLocker} from "../src/LPLocker.sol";
@@ -118,6 +119,9 @@ contract DeployLocal is Script {
 
         require(address(factory) == predictedFactory, "factory address drifted");
 
+        // Periphery, no pairing: deployed after the nonce-sensitive chain.
+        GraduationHelper helper = new GraduationHelper();
+
         vm.stopBroadcast();
 
         console2.log("");
@@ -129,6 +133,7 @@ contract DeployLocal is Script {
         console2.log("LPLocker           ", address(locker));
         console2.log("GraduationManager  ", address(manager));
         console2.log("HoodiumFactory     ", address(factory));
+        console2.log("GraduationHelper   ", address(helper));
         console2.log("");
         console2.log("USDG funded        ", seedWallet);
         console2.log("");
@@ -141,6 +146,7 @@ contract DeployLocal is Script {
         console2.log("=== hoodium_frontend/.env ===");
         console2.log("VITE_LAUNCHPAD_FACTORY=%s", address(factory));
         console2.log("VITE_QUOTE_ADDRESS=%s", address(usdg));
+        console2.log("VITE_GRADUATION_HELPER=%s", address(helper));
         console2.log("");
         console2.log("Restart both dev servers after editing - neither reloads .env on its own.");
     }

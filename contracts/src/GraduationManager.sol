@@ -13,6 +13,7 @@ import {
     IUniswapV3SwapCallback
 } from "./interfaces/IUniswapV3.sol";
 import {LPLocker} from "./LPLocker.sol";
+import {BondingCurve} from "./BondingCurve.sol";
 
 /**
  * @title GraduationManager
@@ -184,6 +185,40 @@ contract GraduationManager is IGraduationManager, IUniswapV3SwapCallback, Reentr
         tokenId = _mintAndLock(token0, token1, amount0, amount1, token, creator);
 
         emit Migrated(token, pool, tokenId, _liquidityOf(tokenId), tokenAmount, usdgAmount);
+    }
+
+    /**
+     * @notice The sqrtPriceX96 `migrate` will open the pool at — or, for a
+     *         pre-existing liquid pool, require it to sit within
+     *         `SQRT_PRICE_BAND_BPS` of — if `curve` completed right now.
+     * @dev View only; nothing here is trusted by `migrate`, which recomputes the
+     *      same number from the amounts the curve actually hands over. It exists
+     *      so a periphery contract (`GraduationHelper`) or a keeper can move a
+     *      griefed pool to exactly this price before the completing buy. The
+     *      completing buy's own token output is included via `quoteBuy`, so the
+     *      result already reflects what the curve will still sell; a graduated
+     *      curve reports the price it actually migrated at.
+     */
+    function targetSqrtPriceX96(address curve) external view returns (uint160) {
+        BondingCurve c = BondingCurve(curve);
+        uint256 usdgForLp = c.graduationTarget() - c.graduationFee();
+        uint256 sold = c.tokensSold();
+        if (!c.graduated()) {
+            (uint256 stillToSell,,,) = c.quoteBuy(type(uint128).max);
+            sold += stillToSell;
+        }
+        uint256 tokensForLp = c.lpAllocation() + c.curveAllocation() - sold;
+        return address(c.token()) < address(usdg)
+            ? _sqrtPriceX96(tokensForLp, usdgForLp)
+            : _sqrtPriceX96(usdgForLp, tokensForLp);
+    }
+
+    /// @notice Whether a liquid pool at `current` would be accepted by `migrate`
+    ///         for a curve whose target is `target` (AUDIT C1, rule 2).
+    function isWithinBand(uint160 current, uint160 target) external pure returns (bool) {
+        uint256 lo = Math.mulDiv(target, BPS - SQRT_PRICE_BAND_BPS, BPS);
+        uint256 hi = Math.mulDiv(target, BPS + SQRT_PRICE_BAND_BPS, BPS, Math.Rounding.Ceil);
+        return current >= lo && current <= hi;
     }
 
     /**

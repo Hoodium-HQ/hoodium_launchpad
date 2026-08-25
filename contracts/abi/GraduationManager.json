@@ -105,6 +105,30 @@
   },
   {
     "type": "function",
+    "name": "isWithinBand",
+    "inputs": [
+      {
+        "name": "current",
+        "type": "uint160",
+        "internalType": "uint160"
+      },
+      {
+        "name": "target",
+        "type": "uint160",
+        "internalType": "uint160"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "pure"
+  },
+  {
+    "type": "function",
     "name": "locker",
     "inputs": [],
     "outputs": [
@@ -199,6 +223,25 @@
       }
     ],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "targetSqrtPriceX96",
+    "inputs": [
+      {
+        "name": "curve",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint160",
+        "internalType": "uint160"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",

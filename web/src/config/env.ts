@@ -41,6 +41,12 @@ export const env = {
   launchpadFactory: raw.VITE_LAUNCHPAD_FACTORY ?? '',
   locker: raw.VITE_LOCKER ?? '',
   feeVault: raw.VITE_FEE_VAULT ?? '',
+  /**
+   * `GraduationHelper` — optional periphery. When set, a completing buy whose
+   * simulation reverts on the pool's price (someone primed it) is offered as an
+   * atomic "fix the pool and buy" through the helper instead of "try later".
+   */
+  graduationHelper: raw.VITE_GRADUATION_HELPER ?? '',
 
   /*
    * Reown (WalletConnect) project id — https://dashboard.reown.com. Required:

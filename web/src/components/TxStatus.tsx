@@ -29,10 +29,15 @@ const REVERT_COPY: Record<string, string> = {
   CurveComplete: 'Curve complete — trading has moved to the pool. Nothing was spent.',
   Expired: 'This trade’s deadline passed before it was mined. Nothing was spent — submit it again.',
   PoolPriceManipulated:
-    'This buy would complete the curve, but someone has primed the pool with liquidity at a hostile price. Graduation is blocked until the pool price is arbitraged back; try again later.',
+    'This buy would complete the curve, but someone has primed the pool with liquidity at a hostile price. Graduation is blocked until the pool price is put back.',
   UnexpectedSwapPayment:
-    'This buy would complete the curve, but the pool has liquidity in the way of its fair price. Graduation is blocked until the pool price is arbitraged back; try again later.',
+    'This buy would complete the curve, but the pool has liquidity in the way of its fair price. Graduation is blocked until the pool price is put back.',
+  RepriceFailed: 'This buy would complete the curve, but the pool could not be moved to its fair price. Graduation is blocked until the pool price is put back.',
   ExcessiveDust: 'The pool would not take enough of the raise. Graduation is blocked until the pool price is arbitraged back; try again later.',
+  SnipeWindowOpen: 'The pool fix is only for the buy that completes the curve, after the launch window. Wait a few blocks.',
+  NothingToFix: 'The pool is already at its fair price — a plain buy will go through.',
+  FixBudgetInsufficient: 'The fix budget was not enough to move the pool price all the way back. Nothing was spent — raise it and try again.',
+  FixBudgetExhausted: 'The fix budget was not enough to move the pool price all the way back. Nothing was spent — raise it and try again.',
   NothingToPull: 'Nothing is left over to pull.',
   NotBeneficiary: 'Only the creator can collect these fees.',
   NotGraduated: 'This token has not graduated yet.',

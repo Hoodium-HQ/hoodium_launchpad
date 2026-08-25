@@ -46,6 +46,7 @@ Copy `.env.example` to `.env`. Everything is `VITE_`-prefixed and public.
 | `VITE_LAUNCHPAD_FACTORY` | `HoodiumFactory`; empty disables `/create` with an explanation |
 | `VITE_LOCKER` | optional `LPLocker` shortcut (else discovered from the factory) |
 | `VITE_FEE_VAULT` | `FeeVault`, shown only |
+| `VITE_GRADUATION_HELPER` | optional `GraduationHelper`; enables "Fix the pool and buy" when a primed pool blocks the completing buy |
 | `VITE_REOWN_PROJECT_ID` | required by AppKit |
 
 No chain-identifying value has a default: a build that does not state its
@@ -106,10 +107,19 @@ is also what the API's CORS reply allows.
   (creates and seeds the pool, so more gas); the trade panel warns when the
   quoted buy would complete the curve. A pool primed with liquidity at a
   hostile price makes that buy revert `PoolPriceManipulated` /
-  `UnexpectedSwapPayment` until the price is arbitraged back — shown as
-  "graduation is blocked until the pool price is arbitraged back; try again
-  later". Once `curveState.complete`, the Sell side is withdrawn and the panel
-  offers the permissionless `graduate()` only for the dev-buy-completion edge.
+  `UnexpectedSwapPayment` / `RepriceFailed` until the price is arbitraged
+  back. When `VITE_GRADUATION_HELPER` is set the panel then offers **Fix the
+  pool and buy**: it approves USDG to the helper for `usdgIn + maxFix`
+  (`maxFix` defaults to 1% of the buy and is editable) and calls
+  `GraduationHelper.fixAndBuy(curve, usdgIn, minTokensOut, deadline, maxFix)`,
+  which re-prices the pool through the attacker's own liquidity and completes
+  the curve in one transaction; the bought tokens, any arbitrage proceeds and
+  the unspent budget all come back to the wallet. Without the helper the copy
+  says "try again later". Gas is never hard-coded — the completing buy costs
+  several times a normal one and the wallet estimates it. The routing
+  decision lives in `src/lib/graduation-fix.ts` (tested). Once
+  `curveState.complete`, the Sell side is withdrawn and the panel offers the
+  permissionless `graduate()` only for the dev-buy-completion edge.
 - `PoolFeesCard`: `collectFees` for the creator; `sweepProtocolFees` for
   anyone (protocol share to the vault, creator share held in
   `creatorOwed0/1`, shown on the card).

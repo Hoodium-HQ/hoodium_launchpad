@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { formatUnits, parseUnits } from 'viem'
 import { useAccount, useReadContract } from 'wagmi'
 import { env } from '@/config/env'
 import { useTransaction } from '@/hooks/useTransaction'
 import { tradeDeadline } from '@/lib/deadline'
-import { curveAbi, erc20Abi } from '@/lib/launchpad-abi'
+import { defaultMaxFix, shouldOfferPoolFix } from '@/lib/graduation-fix'
+import { curveAbi, erc20Abi, graduationHelperAbi } from '@/lib/launchpad-abi'
 import type { TokenDetail } from '@/lib/launchpad-api'
 import { formatAmount, fromBaseUnits } from '@/lib/money'
 import { cn, sanitizeText } from '@/lib/utils'
@@ -32,8 +33,15 @@ import { TxStatus } from './TxStatus'
  * that sits in a mempool cannot execute at a price the user never saw. The buy
  * that reaches the target graduates the curve in the same transaction — it
  * creates and seeds the Uniswap pool, so it costs more gas and can be blocked
- * by a hostilely primed pool; the panel says so before the signature. Once the
- * curve is complete `sell` reverts, so the Sell side is withdrawn.
+ * by a hostilely primed pool; the panel says so before the signature. When
+ * that simulation does revert on the pool's price and a `GraduationHelper` is
+ * configured, the panel offers to fix the pool and buy in one transaction
+ * through it (`@/lib/graduation-fix` decides when). Once the curve is complete
+ * `sell` reverts, so the Sell side is withdrawn.
+ *
+ * Gas is never set here: the completing buy costs several times a normal one
+ * (it creates and seeds the pool) and the wallet's estimate is the only number
+ * that is right for it.
  */
 const SIDES = [
   { value: 'buy' as const, label: 'Buy' },
@@ -47,8 +55,18 @@ const ZERO = '0x0000000000000000000000000000000000000000' as const
 export function TradePanel({ token }: { token: TokenDetail }) {
   const { address, isConnected } = useAccount()
   const [side, setSide] = useState<'buy' | 'sell'>('buy')
-  const [amount, setAmount] = useState('')
+  const [amount, setAmountRaw] = useState('')
+  // A blocked completing buy, when the helper can unblock it. `maxFixInput` is
+  // the user's ceiling for the fix, in whole USDG.
+  const [fixOffered, setFixOffered] = useState(false)
+  const [maxFixInput, setMaxFixInput] = useState('')
   const tx = useTransaction()
+
+  // The offer belongs to the amount it was simulated for.
+  const setAmount = (next: string) => {
+    setAmountRaw(next)
+    setFixOffered(false)
+  }
 
   const riskAcknowledged = useUiStore((s) => s.riskAcknowledged)
   const slippageBps = useUiStore((s) => s.slippageBps)
@@ -97,6 +115,15 @@ export function TradePanel({ token }: { token: TokenDetail }) {
     query: { enabled: side === 'buy' && Boolean(address) && Boolean(env.quoteAddress) },
   })
 
+  const helper = (env.graduationHelper || '0x') as `0x${string}`
+  const { data: helperAllowance, refetch: refetchHelperAllowance } = useReadContract({
+    address: (env.quoteAddress || '0x') as `0x${string}`,
+    abi: erc20Abi,
+    functionName: 'allowance',
+    args: [address ?? ZERO, helper],
+    query: { enabled: fixOffered && Boolean(address) && Boolean(env.quoteAddress) && Boolean(env.graduationHelper) },
+  })
+
   const { data: quoteBalance } = useReadContract({
     address: (env.quoteAddress || '0x') as `0x${string}`,
     abi: erc20Abi,
@@ -129,6 +156,27 @@ export function TradePanel({ token }: { token: TokenDetail }) {
   const outSymbol = side === 'buy' ? symbol : env.quoteSymbol
 
   const needsApproval = side === 'buy' && (allowance ?? 0n) < parsedAmount
+
+  const parsedMaxFix = useMemo(() => {
+    if (!maxFixInput || !/^\d*\.?\d*$/.test(maxFixInput)) return 0n
+    try {
+      return parseUnits(maxFixInput, env.quoteDecimals)
+    } catch {
+      return 0n
+    }
+  }, [maxFixInput])
+  const fixTotal = parsedAmount + parsedMaxFix
+  const helperNeedsApproval = (helperAllowance ?? 0n) < fixTotal
+  // eslint-disable-next-line money/no-number-on-money -- both sides are bigint base units
+  const fixOverBalance = fixTotal > balance
+
+  // The plain buy's simulation reverted on the pool's price: route to the helper.
+  useEffect(() => {
+    if (tx.state !== 'failed') return
+    if (!shouldOfferPoolFix({ side, error: tx.error, helperAddress: env.graduationHelper })) return
+    setFixOffered(true)
+    setMaxFixInput(formatUnits(defaultMaxFix(parsedAmount), env.quoteDecimals))
+  }, [tx.state, tx.error, side, parsedAmount])
   // eslint-disable-next-line money/no-number-on-money -- both sides are bigint base units
   const overBalance = parsedAmount > balance
 
@@ -161,6 +209,25 @@ export function TradePanel({ token }: { token: TokenDetail }) {
       abi: curveAbi,
       functionName: side === 'buy' ? 'buy' : 'sell',
       args: [parsedAmount, minOut, tradeDeadline()],
+    })
+  }
+
+  const fixAndBuy = async () => {
+    if (helperNeedsApproval) {
+      const hash = await tx.execute({
+        address: env.quoteAddress as `0x${string}`,
+        abi: erc20Abi,
+        functionName: 'approve',
+        args: [helper, fixTotal],
+      })
+      if (hash) await refetchHelperAllowance()
+      return
+    }
+    await tx.execute({
+      address: helper,
+      abi: graduationHelperAbi,
+      functionName: 'fixAndBuy',
+      args: [curve, parsedAmount, minOut, tradeDeadline(), parsedMaxFix],
     })
   }
 
@@ -347,6 +414,47 @@ export function TradePanel({ token }: { token: TokenDetail }) {
       )}
 
       <TxStatus tx={tx} className="mt-3" />
+
+      {fixOffered && side === 'buy' && tx.state !== 'confirmed' && (
+        <div className="mt-3 rounded-xl border border-border bg-muted/30 p-3 text-xs">
+          <p className="font-medium text-foreground">Fix the pool and buy</p>
+          <p className="mt-1 text-muted-foreground">
+            One transaction moves the pool price back through the liquidity that is blocking it and then
+            completes the curve; any tokens or {env.quoteSymbol} the re-pricing yields come back to your wallet,
+            and whatever of the budget below is not needed is returned.
+          </p>
+          <label className="mt-2 block">
+            <span className="text-label text-muted-foreground">Max spent on the fix ({env.quoteSymbol})</span>
+            <input
+              type="text"
+              inputMode="decimal"
+              value={maxFixInput}
+              onChange={(e) => setMaxFixInput(e.target.value.replace(/[^\d.]/g, ''))}
+              className={cn(
+                'num mt-1 w-full rounded-xl border bg-background px-3 py-2 text-sm',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                fixOverBalance ? 'border-warning' : 'border-border',
+              )}
+            />
+          </label>
+          {fixOverBalance && (
+            <p className="mt-1 text-warning">Amount plus budget is more than this wallet holds.</p>
+          )}
+          <Button
+            variant="primary"
+            size="lg"
+            className="mt-3 w-full"
+            disabled={parsedAmount === 0n || fixOverBalance || tx.isBusy}
+            onClick={() => void fixAndBuy()}
+          >
+            {tx.isBusy
+              ? 'Working…'
+              : helperNeedsApproval
+                ? `Approve ${env.quoteSymbol} for the fix`
+                : 'Fix the pool and buy'}
+          </Button>
+        </div>
+      )}
     </Card>
   )
 }

@@ -8,7 +8,7 @@ Live at **https://launchpad.hoodium.app** (web) and
 
 | Package | What | Runs on |
 |---|---|---|
-| [`contracts/`](contracts/) | Foundry: `HoodiumFactory`, `BondingCurve`, `GraduationManager`, `LPLocker`, `FeeVault`, `HoodiumToken` | Deployed by the owner from their machine |
+| [`contracts/`](contracts/) | Foundry: `HoodiumFactory`, `BondingCurve`, `GraduationManager`, `LPLocker`, `FeeVault`, `HoodiumToken` + `GraduationHelper` periphery | Deployed by the owner from their machine |
 | [`api/`](api/) | Fastify API + the event indexer, Mongo-backed | Coolify (`hoodium-launchpad-api`) |
 | [`web/`](web/) | Vite/React app | Render static site |
 

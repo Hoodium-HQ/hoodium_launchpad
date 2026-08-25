@@ -95,6 +95,21 @@ contract MockUniswapPool {
         (address tokenIn, address tokenOut) = zeroForOne ? (token0, token1) : (token1, token0);
         uint256 rIn = IERC20(tokenIn).balanceOf(address(this));
         uint256 rOut = IERC20(tokenOut).balanceOf(address(this));
+
+        // Honour the price limit the way Uniswap does: consume only as much
+        // input as it takes to reach it, and land exactly on it. With reserves
+        // (b0, b1), k = b0·b1 and a limit L, the reserve of the input side at
+        // the limit is sqrt(k)·2^96/L (token0 in) or sqrt(k)·L/2^96 (token1 in).
+        bool reachedLimit;
+        {
+            uint256 sqrtK = Math.sqrt(rIn * rOut);
+            uint256 rInAtLimit =
+                zeroForOne ? Math.mulDiv(sqrtK, Q96, sqrtPriceLimitX96) : Math.mulDiv(sqrtK, sqrtPriceLimitX96, Q96);
+            if (rInAtLimit > rIn && rInAtLimit - rIn < amountIn) {
+                amountIn = rInAtLimit - rIn;
+                reachedLimit = true;
+            }
+        }
         uint256 amountOut = rOut - Math.mulDiv(rIn, rOut, rIn + amountIn, Math.Rounding.Ceil);
 
         IERC20(tokenOut).safeTransfer(recipient, amountOut);
@@ -104,6 +119,10 @@ contract MockUniswapPool {
         IUniswapV3SwapCallback(msg.sender).uniswapV3SwapCallback(amount0, amount1, data);
         require(IERC20(tokenIn).balanceOf(address(this)) >= rIn + amountIn, "IIA");
 
+        if (reachedLimit) {
+            sqrtPriceX96 = sqrtPriceLimitX96;
+            return (amount0, amount1);
+        }
         // Re-derive the price from the balances: sqrt(bal1 / bal0) * 2^96.
         uint256 b0 = IERC20(token0).balanceOf(address(this));
         uint256 b1 = IERC20(token1).balanceOf(address(this));
