@@ -76,19 +76,27 @@ export function AccountMenu({
         aria-controls={menuId}
         /* An address is hex people compare character by character and gets the
            mono face (design-system.md section 6). */
-        className="relative max-w-[12rem] truncate font-mono tabular-nums"
+        className="max-w-[12rem] font-mono tabular-nums"
       >
         <Wallet aria-hidden />
-        {truncateMiddle(address)}
-        {fees.count > 0 && (
-          <span
-            className="num absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground"
-            aria-label={`${fees.count} token${fees.count === 1 ? '' : 's'} with creator fees ready`}
-          >
-            {fees.count}
-          </span>
-        )}
+        {/* The truncation belongs to the address, not to the button. On the
+            button it was `overflow: hidden` over the whole control, which
+            clipped the badge below to a wedge in the corner. */}
+        <span className="truncate">{truncateMiddle(address)}</span>
       </Button>
+
+      {/* Outside the button for the same reason: hung off the wrapper, no
+          overflow rule on the control can ever cut it in half. `pointer-events-none`
+          because it sits over the button's own corner and every click there is
+          meant for the button. */}
+      {fees.count > 0 && (
+        <span
+          className="num pointer-events-none absolute -right-1.5 -top-1.5 z-10 grid size-5 place-items-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground"
+          aria-label={`${fees.count} token${fees.count === 1 ? '' : 's'} with creator fees ready`}
+        >
+          {fees.count}
+        </span>
+      )}
 
       {open && (
         <div
