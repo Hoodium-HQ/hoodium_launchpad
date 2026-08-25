@@ -1,5 +1,23 @@
 import { clsx, type ClassValue } from 'clsx'
-import { twMerge } from 'tailwind-merge'
+import { extendTailwindMerge } from 'tailwind-merge'
+
+/**
+ * The type scale, declared to tailwind-merge.
+ *
+ * `text-*` is ambiguous — it sets either a size or a colour — and tailwind-merge
+ * decides which by validating the suffix: t-shirt sizes are font sizes, anything
+ * else is taken for a colour. Our scale (design-system.md section 6) is named
+ * rather than sized, so `text-label` was read as a colour, put in the same group
+ * as `text-primary`, and dropped as the loser. The class silently vanished and
+ * the element fell back to inherited size.
+ */
+const twMerge = extendTailwindMerge({
+  extend: {
+    classGroups: {
+      'font-size': [{ text: ['page-title', 'section-title', 'card-title', 'label'] }],
+    },
+  },
+})
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -103,4 +121,18 @@ export function hasLinkLike(value: string): boolean {
 
 export function isAddress(value: string): boolean {
   return /^0x[0-9a-fA-F]{40}$/.test(value)
+}
+
+/**
+ * Decimal places for a token amount.
+ *
+ * A pair routinely spans nine orders of magnitude, and one fixed `dp` is wrong
+ * at both ends: two places turns a small balance into `0.00`, six turns a large
+ * one into a column of noise. Chosen from the integer part, which is a string,
+ * so nothing here converts a balance to a float.
+ */
+export function amountDp(value: string): number {
+  const int = value.replace('-', '').split('.')[0] ?? '0'
+  if (int === '0') return 6
+  return int.length >= 5 ? 2 : 4
 }

@@ -6,6 +6,7 @@ import { CreatorFeesCard } from '@/components/CreatorFeesCard'
 import { CurveProgress } from '@/components/CurveProgress'
 import { PoolFeesCard } from '@/components/PoolFeesCard'
 import { RiskFlags } from '@/components/RiskFlag'
+import { StatTile } from '@/components/StatTile'
 import { TokenActivity } from '@/components/TokenActivity'
 import { TokenAvatar } from '@/components/TokenAvatar'
 import { TokenChartCard } from '@/components/TokenChartCard'
@@ -14,9 +15,10 @@ import { TradePanel } from '@/components/TradePanel'
 import { Card } from '@/components/ui/card'
 import { Skeleton, SkeletonCard } from '@/components/ui/skeleton'
 import { env } from '@/config/env'
+import { useDocumentMeta } from '@/hooks/useDocumentMeta'
 import { useToken } from '@/hooks/useLaunchpad'
 import { ApiError, tokenImageUrl } from '@/lib/launchpad-api'
-import { formatAmount, fromBaseUnits } from '@/lib/money'
+import { formatAmount, formatPrice, fromBaseUnits, isZero, usdToMoney } from '@/lib/money'
 import { cn, relativeTime, sanitizeText } from '@/lib/utils'
 
 /**
@@ -24,21 +26,41 @@ import { cn, relativeTime, sanitizeText } from '@/lib/utils'
  *
  * ── Layout order is an argument, not a preference ────────────────────────────
  * About first, because a stranger arriving from a shared link needs to know
- * what this is before any number means anything. Then two columns: the curve
- * and the trade panel on the left, with the risk flags **above** the panel
- * where a buyer cannot transact without passing them; price, chart and history
- * on the right. Fee cards last — the creator's is only rendered for the
- * creator, the pool's is the disclosure everyone gets.
+ * what this is before any number means anything. Then the four figures a buyer
+ * scans, in the same tiles hoodium.app puts under a position. Then two
+ * columns: the curve and the trade panel on the left, with the risk flags
+ * **above** the panel where a buyer cannot transact without passing them;
+ * chart and history on the right. Fee cards last — the creator's is only
+ * rendered for the creator, the pool's is the disclosure everyone gets.
  */
 export function TokenPage() {
   const { address = '' } = useParams()
   const token = useToken(address)
+
+  const t = token.data
+  const name = sanitizeText(t?.name, 60) || 'Unnamed'
+  const symbol = sanitizeText(t?.symbol, 16) || '???'
+
+  useDocumentMeta({
+    title: t ? `${name} ($${symbol})` : 'Token',
+    description: t
+      ? `${name} on ${env.chainName}: ${t.graduated ? 'graduated to a locked Uniswap v3 pool' : 'trading on a bonding curve'}. ` +
+        `Market cap ${formatAmount(usdToMoney(t.marketCapUsd), { compact: true, prefix: '$' })}, ${t.holderCount} holders.`
+      : undefined,
+    canonicalPath: `/t/${address.toLowerCase()}`,
+    noindex: !t,
+  })
 
   if (token.isLoading) {
     return (
       <div className="space-y-5">
         <Skeleton className="h-5 w-32" />
         <SkeletonCard lines={3} />
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {[0, 1, 2, 3].map((i) => (
+            <SkeletonCard key={i} lines={1} />
+          ))}
+        </div>
         <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
           <SkeletonCard lines={6} className="h-96" />
           <SkeletonCard lines={8} className="h-96" />
@@ -47,7 +69,7 @@ export function TokenPage() {
     )
   }
 
-  if (!token.data) {
+  if (!t) {
     const missing = token.error instanceof ApiError && token.error.status === 404
     return (
       <Card className="p-8 text-center">
@@ -64,10 +86,7 @@ export function TokenPage() {
     )
   }
 
-  const t = token.data
   // Creator-supplied and attacker-controlled, every one of them.
-  const name = sanitizeText(t.name, 60) || 'Unnamed'
-  const symbol = sanitizeText(t.symbol, 16) || '???'
   const description = sanitizeText(t.description, 512)
   const graduated = t.status === 'graduated' || t.graduated
   const pct = Math.min(100, Math.max(0, t.progressBps / 100))
@@ -81,6 +100,11 @@ export function TokenPage() {
   const creatorTaxPct =
     tradeFeeBps !== null && creatorFeeShareBps !== null ? (tradeFeeBps * creatorFeeShareBps) / 1_000_000 : null
 
+  // Exact spot price in quote units (USDG is $1). A fresh token with no curve
+  // read yet reports "0", which the tile prints as a dash rather than $0.
+  const spot = fromBaseUnits(t.curveState.price, env.quoteDecimals)
+  const price = isZero(spot) ? null : spot
+
   return (
     <div className="space-y-5">
       <Link to="/" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
@@ -92,7 +116,7 @@ export function TokenPage() {
 
       {/* ── About ──────────────────────────────────────────────────────── */}
       <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
-        <Card className="p-5">
+        <Card className="min-w-0 p-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="flex min-w-0 items-start gap-3">
               <TokenAvatar
@@ -100,15 +124,12 @@ export function TokenPage() {
                 name={name}
                 src={tokenImageUrl(t)}
                 className="size-14 shrink-0 text-lg"
+                rounded="rounded-lg"
               />
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <h1 className="truncate text-page-title">{name}</h1>
-                  {graduated ? (
-                    <Chip tone="up">Graduated</Chip>
-                  ) : (
-                    <Chip tone="muted">Bonding curve</Chip>
-                  )}
+                  {graduated ? <Chip tone="up">Graduated</Chip> : <Chip tone="muted">Bonding curve</Chip>}
                   <Chip tone="muted">Paired {env.quoteSymbol}</Chip>
                 </div>
                 <p className="num text-sm text-muted-foreground">${symbol}</p>
@@ -169,7 +190,7 @@ export function TokenPage() {
         {/* Holder fee sharing — the terms, stated where everyone reads them. */}
         <Card className="p-5">
           <div className="flex items-start gap-3">
-            <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-muted">
+            <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted">
               <Percent className="size-4 text-muted-foreground" aria-hidden />
             </span>
             <div>
@@ -196,13 +217,63 @@ export function TokenPage() {
         </Card>
       </div>
 
+      {/* ── The four figures ───────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatTile
+          label="Price"
+          value={null}
+          dp={0}
+          suffix=""
+          note={`The curve's spot price right now, in ${env.quoteSymbol}, which is priced at $1.`}
+        >
+          {price ? formatPrice(price, '$') : '—'}
+        </StatTile>
+        <StatTile
+          label="Market cap"
+          value={usdToMoney(t.marketCapUsd)}
+          dp={0}
+          prefix="$"
+          compact
+          suffix=""
+          note="Spot price times the fixed supply. Nothing is minted after launch."
+          rows={
+            t.athMarketCapUsd !== null
+              ? [{ term: 'All-time high', value: usdToMoney(t.athMarketCapUsd), dp: 0, suffix: '' }]
+              : []
+          }
+        />
+        <StatTile
+          label="Volume 24h"
+          value={usdToMoney(t.volumeUsd24h)}
+          dp={0}
+          prefix="$"
+          compact
+          suffix=""
+          note={graduated ? 'Curve trades only. Pool trades after graduation are not indexed.' : 'Indexed curve trades over the last day.'}
+          rows={[{ term: 'All time', value: usdToMoney(t.volumeUsdAll), dp: 0, suffix: '' }]}
+        />
+        <StatTile
+          label="Holders"
+          value={null}
+          dp={0}
+          suffix=""
+          note="Reconstructed from curve trades. Direct transfers are not indexed, so the true count can differ."
+        >
+          {t.holderCount.toLocaleString('en-US')}
+        </StatTile>
+      </div>
+
       {/* ── Trade + market ─────────────────────────────────────────────── */}
       <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <Card className="p-5">
             <div className="flex items-baseline justify-between gap-3">
-              <span className="text-label text-muted-foreground">{graduated ? 'Graduated' : 'Bonding curve'}</span>
-              <span className="num text-sm font-medium">{graduated ? '100%' : `${pct.toFixed(pct >= 10 ? 0 : 1)}% to graduation`}</span>
+              <span className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                {graduated ? 'Graduated' : 'Bonding curve'}
+              </span>
+              <span className="num text-sm font-medium">
+                {graduated ? '100%' : `${pct.toFixed(pct >= 10 ? 0 : 1)}% to graduation`}
+              </span>
             </div>
             <CurveProgress progressBps={t.progressBps} className="mt-3" showLabel={false} />
             <p className="mt-3 text-xs text-muted-foreground">
@@ -239,7 +310,7 @@ export function TokenPage() {
           <TradePanel token={t} />
         </div>
 
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <TokenChartCard token={t} />
           <TokenActivity token={t} />
         </div>
@@ -268,8 +339,8 @@ function Chip({ tone, children }: { tone: 'up' | 'muted'; children: React.ReactN
 function Fact({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0">
-      <dt className="text-label text-muted-foreground">{label}</dt>
-      <dd className="mt-0.5 truncate text-foreground">{children}</dd>
+      <dt className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-muted-foreground">{label}</dt>
+      <dd className="mt-1 truncate text-foreground">{children}</dd>
     </div>
   )
 }

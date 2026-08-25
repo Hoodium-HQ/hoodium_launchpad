@@ -5,12 +5,14 @@ import { formatUnits, parseUnits } from 'viem'
 import { useAccount, useReadContract } from 'wagmi'
 import { ConnectButton } from '@/components/ConnectButton'
 import { WrongChainBanner } from '@/components/Banners'
+import { Clipart } from '@/components/Clipart'
 import { LaunchConfirmDialog } from '@/components/LaunchConfirmDialog'
 import { LaunchPreview } from '@/components/LaunchPreview'
 import { TxStatus } from '@/components/TxStatus'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { env } from '@/config/env'
+import { useDocumentMeta } from '@/hooks/useDocumentMeta'
 import { useLaunchpadConfig, usePinMetadata } from '@/hooks/useLaunchpad'
 import { useLockerTerms } from '@/hooks/useLockerTerms'
 import { useTransaction } from '@/hooks/useTransaction'
@@ -52,6 +54,12 @@ import { cn, hasConfusableCharacters } from '@/lib/utils'
  * and the disagreement would surface as a reverted transaction at best.
  */
 export function LaunchToken() {
+  useDocumentMeta({
+    title: 'Create a token',
+    description: `Deploy a fixed-supply token on ${env.chainName} in one transaction. It trades on a bonding curve priced in ${env.quoteSymbol} and graduates into locked Uniswap v3 liquidity.`,
+    canonicalPath: '/create',
+  })
+
   const { address, isConnected } = useAccount()
   const navigate = useNavigate()
   const tx = useTransaction()
@@ -261,10 +269,23 @@ export function LaunchToken() {
 
       <WrongChainBanner />
 
+      {/* One line and a sticker, like every page heading on hoodium.app. */}
+      <header className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
+        <div className="min-w-0">
+          <h1 className="text-balance text-xl font-semibold leading-tight tracking-tight sm:text-2xl">
+            Create a token
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            One transaction: a fixed supply, a bonding curve in {env.quoteSymbol}, and liquidity that locks at
+            graduation.
+          </p>
+        </div>
+        <Clipart name="coins-sprout" float className="hidden size-16 sm:block" />
+      </header>
+
       <div className="grid gap-5 lg:grid-cols-[1fr_340px]">
         {/* ── The form ──────────────────────────────────────────────────── */}
         <Card className="space-y-5 p-5 sm:p-6">
-          <h1 className="text-page-title">Create a token</h1>
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Name" description={`Letters, numbers, and spaces. ${NAME_MAX} characters max.`}>

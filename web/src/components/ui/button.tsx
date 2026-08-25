@@ -13,7 +13,24 @@ import { cn } from '@/lib/utils'
  */
 const buttonVariants = cva(
   'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-medium ' +
-    'transition-colors duration-[120ms] ease-out focus-visible:outline-none focus-visible:ring-2 ' +
+    /*
+     * `active:scale-[0.98]` — the only motion on this component, and it is
+     * deliberately at the edge of perceptible.
+     *
+     * Buttons here are pressed dozens of times a session, which is the tier
+     * where animation starts costing more than it returns: anything showier
+     * would make the app feel slower with every press. What it buys is the one
+     * thing a press had none of — confirmation that the click registered, on
+     * controls that go on to open a wallet and ask for a signature, where the
+     * next frame can be several hundred milliseconds away.
+     *
+     * The transition is now an explicit property list rather than
+     * `transition-colors`, so `transform` shares the same 120ms curve instead
+     * of snapping while the background eases. `disabled:pointer-events-none`
+     * already keeps `:active` off a dead control.
+     */
+    'transition-[color,background-color,border-color,transform] duration-[120ms] ease-out active:scale-[0.98] ' +
+    'focus-visible:outline-none focus-visible:ring-2 ' +
     'focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ' +
     'disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0',
   {

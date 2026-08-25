@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { env } from '@/config/env'
 import { cn, truncateMiddle } from '@/lib/utils'
+import { Hint } from '@/components/ui/tooltip'
 
 /**
  * `Address` — design-system.md section 7. Truncated mono identifier, click to copy.
@@ -91,6 +92,13 @@ export function Address({
   const { text, icon } = SIZES[size]
   const truncated = truncateMiddle(value, lead, tail)
   const what = label ?? 'address'
+  /*
+   * The tick carries `.mark-in`, and what makes a keyframe fire at all here is
+   * that this is a *different component* — React replaces the element rather
+   * than re-rendering it, so the animation starts from scratch on every copy
+   * and again on every reset. A `className` toggled on one persistent element
+   * would play once and never again.
+   */
   const Mark = copied ? Check : Copy
 
   const base = cn('font-mono', text, muted && 'text-muted-foreground', className)
@@ -98,19 +106,24 @@ export function Address({
   // Linked: two controls, because navigating and copying are two intents.
   const linkClass = 'rounded hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring'
   const destination = to ? (
-    <Link to={to} className={linkClass} title={value}>
+    <Hint content={value} contentClassName="font-mono" render={<Link to={to} className={linkClass} />}>
       {truncated}
-    </Link>
+    </Hint>
   ) : link && env.explorerUrl ? (
-    <a
-      href={`${env.explorerUrl}/address/${value}`}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={linkClass}
-      title={value}
+    <Hint
+      content={value}
+      contentClassName="font-mono"
+      render={
+        <a
+          href={`${env.explorerUrl}/address/${value}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={linkClass}
+        />
+      }
     >
       {truncated}
-    </a>
+    </Hint>
   ) : null
 
   if (destination) {
@@ -123,25 +136,24 @@ export function Address({
           className="rounded p-0.5 transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={copied ? 'Copied' : `Copy ${what} ${value}`}
         >
-          <Mark className={cn(icon, copied && 'text-up')} aria-hidden />
+          <Mark className={cn(icon, copied && 'mark-in text-up')} aria-hidden />
         </button>
       </span>
     )
   }
 
   return (
-    <button
-      type="button"
-      onClick={copy}
-      title={value}
-      aria-label={copied ? 'Copied' : `Copy ${what} ${value}`}
+    <Hint
+      content={value}
+      contentClassName="font-mono"
+      render={<button type="button" onClick={copy} aria-label={copied ? 'Copied' : `Copy ${what} ${value}`} />}
       className={cn(
         'inline-flex items-center gap-1.5 rounded transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
         base,
       )}
     >
       {truncated}
-      <Mark className={cn(icon, 'shrink-0', copied && 'text-up')} aria-hidden />
-    </button>
+      <Mark className={cn(icon, 'shrink-0', copied && 'mark-in text-up')} aria-hidden />
+    </Hint>
   )
 }

@@ -29,6 +29,9 @@ export default {
         up: 'hsl(var(--up))',
         down: 'hsl(var(--down))',
         warning: 'hsl(var(--warning))',
+        /* The missing stop between amber and lime — see `--caution` in index.css.
+           A scale step, not a status. */
+        caution: 'hsl(var(--caution))',
         destructive: { DEFAULT: 'hsl(var(--destructive))', foreground: 'hsl(var(--foreground))' },
       },
       borderRadius: {
@@ -38,8 +41,10 @@ export default {
         md: 'calc(var(--radius) - 8px)',
       },
       fontFamily: {
-        sans: ['"Geist Variable"', 'Geist', 'Inter', 'system-ui', 'sans-serif'],
-        mono: ['"Geist Mono Variable"', '"Geist Mono"', '"JetBrains Mono"', 'ui-monospace', 'monospace'],
+        /* Actually shipped, unlike the two faces this line used to name. See the
+           import at the top of index.css. */
+        sans: ['"Geist Variable"', 'Inter', 'system-ui', 'sans-serif'],
+        mono: ['"Geist Mono Variable"', '"JetBrains Mono"', 'ui-monospace', 'monospace'],
       },
       fontSize: {
         // design-system.md section 6.
@@ -50,10 +55,16 @@ export default {
       },
       keyframes: {
         'fade-in': { from: { opacity: '0' }, to: { opacity: '1' } },
+        float: {
+          '0%, 100%': { transform: 'translateY(0)' },
+          '50%': { transform: 'translateY(-6px)' },
+        },
       },
       animation: {
         // 200ms feed row entry (design-system.md section 10).
         'fade-in': 'fade-in 200ms ease-out',
+        // Slow enough to be a presence, not a motion. Sticker illustrations only.
+        float: 'float 6s ease-in-out infinite',
       },
     },
   },

@@ -26,10 +26,15 @@ export type CardToken = Pick<
  *   [curve progress]    pre-graduation only; graduated cards show FDV instead
  *   0xB9F5…24b0  15d    12px mono muted, space-between
  *
+ * The surface is the market table's: `bg-card` inside `border-border` at the
+ * system radius, the hover a brightened border rather than a lift — no shadows
+ * on a near-black canvas (design-system.md section 4). Rows arrive with the
+ * same 200ms cascade the boards on hoodium.app use, driven by `index`.
+ *
  * `now` comes from the parent's ticking clock so forty cards share one
  * interval and the "5s ago" on every one of them moves together.
  */
-export function TokenCard({ token, now }: { token: CardToken; now: number }) {
+export function TokenCard({ token, now, index = 0 }: { token: CardToken; now: number; index?: number }) {
   // Creator-supplied and attacker-controlled.
   const name = sanitizeText(token.name, 40) || 'Unnamed'
   const symbol = sanitizeText(token.symbol, 12) || '???'
@@ -41,9 +46,10 @@ export function TokenCard({ token, now }: { token: CardToken; now: number }) {
   return (
     <Link
       to={`/t/${token.address}`}
+      style={{ '--i': index } as React.CSSProperties}
       className={cn(
-        'group block animate-fade-in rounded-2xl border border-border bg-card p-3',
-        'transition-colors duration-[120ms] hover:border-primary/30',
+        'stagger-in group block rounded-2xl border border-border bg-card p-3',
+        'transition-colors duration-[120ms] hover:border-muted-foreground/40',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
       )}
     >
@@ -53,6 +59,7 @@ export function TokenCard({ token, now }: { token: CardToken; now: number }) {
           name={name}
           src={tokenImageUrl(token)}
           className="aspect-square w-full text-2xl"
+          rounded="rounded-lg"
         />
         {token.graduated && (
           <span className="absolute left-2 top-2 inline-flex items-center rounded-full border border-up/25 bg-up/15 px-2 py-0.5 text-[11px] font-medium leading-none text-up backdrop-blur">
@@ -79,8 +86,15 @@ export function TokenCard({ token, now }: { token: CardToken; now: number }) {
       {!token.graduated && <CurveProgress progressBps={token.progressBps} className="mt-2" />}
 
       <div className="mt-2 flex items-center justify-between gap-2">
-        <span className="num whitespace-nowrap text-[12px] text-muted-foreground">{truncateMiddle(token.address, 5, 4)}</span>
-        <span className={cn('num whitespace-nowrap text-[12px]', isFresh ? 'text-primary' : 'text-muted-foreground')}>
+        <span className="num whitespace-nowrap text-[12px] text-muted-foreground">
+          {truncateMiddle(token.address, 5, 4)}
+        </span>
+        <span
+          className={cn(
+            'num whitespace-nowrap text-[12px]',
+            isFresh ? 'text-primary' : 'text-muted-foreground',
+          )}
+        >
           {relativeTime(token.createdAt, now)}
         </span>
       </div>

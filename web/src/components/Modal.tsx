@@ -65,6 +65,10 @@ export function Modal({
       // to this element. Harmless — a top-layer backdrop only exists while a
       // dialog is open, and this is the only dialog in the app.
       className={cn(
+        // Entry and exit live in `index.css` — a `<dialog>` transitions out of
+        // `display: none`, which needs `@starting-style` and `allow-discrete`
+        // rather than anything expressible as a utility class.
+        'modal-dialog',
         'w-[min(28rem,calc(100vw-2rem))] rounded-2xl border border-border bg-card p-0 text-foreground',
         /*
          * A confirm dialog with a percentage picker, four amount rows and a

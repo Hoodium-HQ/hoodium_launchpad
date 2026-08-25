@@ -27,22 +27,27 @@ export function useCommandSearchShortcut(open: () => void) {
   }, [open])
 }
 
+/** ⌘K on a Mac, Ctrl+K everywhere else — the hint has to match the keyboard it is read on. */
+const SHORTCUT_HINT =
+  typeof navigator !== 'undefined' && /mac|iphone|ipad|ipod/i.test(navigator.platform ?? '') ? '⌘K' : 'Ctrl K'
+
 export function SearchTrigger({ onClick, className }: { onClick: () => void; className?: string }) {
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn(
-        'flex h-10 w-full items-center gap-2 rounded-xl border border-border bg-card px-3 text-left text-sm text-muted-foreground',
-        'transition-colors duration-[120ms] hover:border-primary/30 hover:text-foreground',
+        // The navbar's field, at page width: same hairline, same hint chip.
+        'flex h-10 w-full items-center gap-2 rounded-lg border border-border/70 bg-card pl-3 pr-2 text-left text-sm text-muted-foreground',
+        'transition-colors duration-[120ms] hover:border-border hover:text-foreground',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         className,
       )}
     >
       <Search className="size-4 shrink-0" aria-hidden />
       <span className="min-w-0 flex-1 truncate">Search tokens by name, symbol or address</span>
-      <kbd className="num hidden shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[10px] sm:inline-block">
-        ⌘K
+      <kbd className="hidden shrink-0 rounded border border-border/70 px-1.5 py-0.5 font-mono text-[0.625rem] text-muted-foreground sm:inline-block">
+        {SHORTCUT_HINT}
       </kbd>
     </button>
   )
@@ -86,7 +91,7 @@ export function CommandSearch({ open, onClose }: { open: boolean; onClose: () =>
           onSubmit()
         }}
       >
-        <label className="flex items-center gap-2 rounded-xl border border-border bg-background px-3 focus-within:ring-2 focus-within:ring-ring">
+        <label className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 focus-within:ring-2 focus-within:ring-ring">
           <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           <input
             ref={inputRef}

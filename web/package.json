@@ -15,6 +15,7 @@
     "mock-api": "node scripts/mock-api.mjs"
   },
   "dependencies": {
+    "@base-ui/react": "^1.7.0",
     "@fontsource-variable/geist": "^5.2.5",
     "@fontsource-variable/geist-mono": "^5.2.5",
     "@reown/appkit": "^1.8.23",

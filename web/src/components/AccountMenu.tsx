@@ -1,8 +1,9 @@
 import { useAppKit } from '@reown/appkit/react'
-import { Check, Coins, Copy, LogOut, RefreshCw, User, Wallet } from 'lucide-react'
+import { Coins, LogOut, RefreshCw, User, Wallet } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { useDisconnect } from 'wagmi'
+import { Address } from '@/components/Address'
 import { TokenIcon } from '@/components/TokenIcon'
 import { TxStatus } from '@/components/TxStatus'
 import { Button, type ButtonProps } from '@/components/ui/button'
@@ -15,12 +16,16 @@ import { cn, sanitizeText, truncateMiddle } from '@/lib/utils'
 /**
  * The connected-wallet pill and its menu.
  *
- * The pill carries a badge with the number of tokens whose creator fees are
- * ready to claim, and the menu lists them with a Claim button each — a creator
- * should never have to remember which of their launches is owed money. The
- * claim goes straight to the curve; the API only says where to look.
+ * The shell is hoodium.app's account menu — the same address header with the
+ * inline copy, the same rows, the same popover entrance growing out of the
+ * corner it hangs from. What is this product's own is the middle band: the
+ * pill carries a badge with the number of tokens whose creator fees are ready
+ * to claim, and the menu lists them with a Claim button each, because a
+ * creator should never have to remember which of their launches is owed money.
+ * The claim goes straight to the curve; the API only says where to look.
  *
- * Elevation level 3: popover surface and a border, no shadow.
+ * Elevation level 3 (design-system.md section 4): popover surface and a border,
+ * no shadow.
  */
 export function AccountMenu({
   address,
@@ -34,7 +39,6 @@ export function AccountMenu({
   className?: string
 }) {
   const [open, setOpen] = useState(false)
-  const [copied, setCopied] = useState(false)
   const wrapper = useRef<HTMLDivElement>(null)
   const menuId = useId()
 
@@ -58,17 +62,6 @@ export function AccountMenu({
     }
   }, [open])
 
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(address)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1200)
-    } catch {
-      // Clipboard is permission-gated and can simply refuse. The address is on
-      // screen either way.
-    }
-  }
-
   const rowClass =
     'flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm text-muted-foreground ' +
     'transition-colors duration-[120ms] hover:bg-muted/60 hover:text-foreground'
@@ -81,6 +74,8 @@ export function AccountMenu({
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-controls={menuId}
+        /* An address is hex people compare character by character and gets the
+           mono face (design-system.md section 6). */
         className="relative max-w-[12rem] truncate font-mono tabular-nums"
       >
         <Wallet aria-hidden />
@@ -99,18 +94,23 @@ export function AccountMenu({
         <div
           id={menuId}
           role="menu"
-          className="absolute right-0 top-full z-50 mt-2 w-72 overflow-hidden rounded-2xl border border-border bg-popover"
+          /* `origin-top-right` is the whole point of the entrance: the menu is
+             pinned to the button's right edge, so that is the corner it has to
+             grow out of for the motion to say where it came from. */
+          className="popover-in absolute right-0 top-full z-50 mt-2 w-72 origin-top-right overflow-hidden rounded-2xl border border-border bg-popover"
         >
           <div className="border-b border-border px-3 py-3">
-            <p className="text-label text-muted-foreground">Connected</p>
-            <p className="truncate font-mono text-xs text-foreground" title={address}>
-              {truncateMiddle(address, 10, 8)}
+            <p className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+              Connected
             </p>
+            {/* Copying lives on the address itself, which is where every other
+                address in the product puts it. */}
+            <Address value={address} lead={10} tail={8} className="mt-1" />
           </div>
 
           {/* Creator fees ready — one row per token, each with its own claim. */}
           <div className="border-b border-border p-1.5">
-            <p className="flex items-center gap-1.5 px-3 pb-1 pt-1.5 text-label text-muted-foreground">
+            <p className="flex items-center gap-1.5 px-3 pb-1 pt-1.5 text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-muted-foreground">
               <Coins className="size-3.5" aria-hidden />
               Creator fees ready
             </p>
@@ -155,12 +155,10 @@ export function AccountMenu({
               <User className="size-4" aria-hidden />
               Profile
             </Link>
+          </div>
 
-            <button type="button" role="menuitem" onClick={() => void copy()} className={rowClass}>
-              {copied ? <Check className="size-4 text-up" aria-hidden /> : <Copy className="size-4" aria-hidden />}
-              {copied ? 'Copied' : 'Copy address'}
-            </button>
-
+          <div className="border-t border-border p-1.5">
+            {/* The one thing AppKit does that we are not rebuilding. */}
             <button
               type="button"
               role="menuitem"

@@ -51,7 +51,16 @@
     />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
 
-    <title>Hoodium Launchpad — Launch and trade tokens on Robinhood Chain</title>
+    <!--
+      Indexing. This is the static floor, correct for the explore page. Routes
+      that should not be indexed — a profile before a wallet is connected, the
+      not-found page — rewrite it to `noindex` from `src/lib/seo.ts` once the
+      app runs.
+    -->
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />
+
+    <!-- Kept in step with DEFAULT_TITLE / DEFAULT_DESCRIPTION in `src/lib/seo.ts`. -->
+    <title>Hoodium Launchpad: launch and trade tokens on Robinhood Chain</title>
     <meta
       name="description"
       content="Launch and explore fixed-supply tokens on Robinhood Chain. Bonding curves priced in USDG that graduate into locked Uniswap v3 liquidity. Your wallet submits every transaction; Hoodium never custodies assets."
@@ -72,21 +81,69 @@
 
     <!-- Share previews — the app-level default; per-token OG tags are a later concern. -->
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="Hoodium Launchpad" />
     <meta property="og:site_name" content="Hoodium Launchpad" />
+    <meta property="og:locale" content="en" />
+    <meta property="og:title" content="Hoodium Launchpad: launch and trade tokens on Robinhood Chain" />
     <meta property="og:url" content="https://launchpad.hoodium.app/" />
     <meta
       property="og:description"
       content="Launch and explore fixed-supply tokens on Robinhood Chain. Bonding curves priced in USDG that graduate into locked Uniswap v3 liquidity. Your wallet submits every transaction; Hoodium never custodies assets."
     />
+    <!-- Absolute, not `/logo.png`: enough unfurlers (Slack, several Telegram
+         clients) drop a relative og:image outright. -->
     <meta property="og:image" content="https://launchpad.hoodium.app/logo.png" />
+    <meta property="og:image:type" content="image/png" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Hoodium Launchpad" />
+    <meta name="twitter:title" content="Hoodium Launchpad: launch and trade tokens on Robinhood Chain" />
+    <meta
+      name="twitter:description"
+      content="Launch and explore fixed-supply tokens on Robinhood Chain. Bonding curves priced in USDG that graduate into locked Uniswap v3 liquidity. Your wallet submits every transaction; Hoodium never custodies assets."
+    />
     <meta name="twitter:image" content="https://launchpad.hoodium.app/logo.png" />
     <link rel="canonical" href="https://launchpad.hoodium.app/" />
   </head>
   <body>
     <div id="root"></div>
+
+    <!--
+      What this page says when nothing runs it. Until the bundle executes,
+      `#root` is empty — which is the whole document for a crawler that does
+      not render JavaScript. This is the site's claim in its own words, plus
+      the machine-readable route into the figures. Keep it in step with the
+      description in the head.
+    -->
+    <noscript>
+      <main style="margin: 0 auto; max-width: 46rem; padding: 3rem 1.25rem; line-height: 1.6">
+        <h1>Hoodium Launchpad: launch and trade tokens on Robinhood Chain</h1>
+
+        <p>
+          Hoodium Launchpad lets anyone deploy a fixed-supply token on Robinhood Chain in one
+          transaction. Each token trades on a bonding curve priced in USDG until it reaches its
+          graduation target, at which point the curve closes and its reserve becomes a Uniswap v3
+          position whose liquidity is locked for good. Every trade, launch and fee is public chain
+          state; the pages here are a reading of it.
+        </p>
+
+        <p>
+          Your wallet signs every transaction and Hoodium custodies nothing. Anyone can launch a
+          token, Hoodium does not review or endorse any of them, and most never graduate. You can
+          lose everything you put in.
+        </p>
+
+        <h2>Pages</h2>
+        <ul>
+          <li><a href="/">Explore</a>: tokens on the curve and tokens that graduated.</li>
+          <li><a href="/create">Create</a>: launch a token.</li>
+          <li><a href="/profile">Profile</a>: holdings, launches and trades of an address.</li>
+        </ul>
+
+        <p>
+          To use the site itself, enable JavaScript. Signing a transaction needs a wallet in the
+          browser, and there is no server-rendered path to that.
+        </p>
+      </main>
+    </noscript>
+
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -2,7 +2,9 @@ import { Plus } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { BackendOfflineBanner, WrongChainBanner } from '@/components/Banners'
+import { Clipart } from '@/components/Clipart'
 import { CommandSearch, SearchTrigger } from '@/components/CommandSearch'
+import { Freshness } from '@/components/Freshness'
 import { Pagination } from '@/components/Pagination'
 import { SegmentedControl } from '@/components/SegmentedControl'
 import { TokenCard } from '@/components/TokenCard'
@@ -10,6 +12,7 @@ import { buttonVariants } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { env } from '@/config/env'
+import { useDocumentMeta } from '@/hooks/useDocumentMeta'
 import { useTokenList } from '@/hooks/useLaunchpad'
 import { useNow } from '@/hooks/useNow'
 import type { TokenListItem, TokenListSort, VolumeWindow } from '@/lib/launchpad-api'
@@ -28,6 +31,11 @@ import { cn } from '@/lib/utils'
  *
  * Sort, window and page live in the URL so a view someone wants to show a
  * friend survives the paste.
+ *
+ * ── The page's shape is hoodium.app's ────────────────────────────────────────
+ * One-line heading with a sticker beside it, a control row, then the board,
+ * with the claim the page makes moved to a footnote under it. On a surface
+ * someone opens to read a ranking, the ranking is the argument.
  */
 type TokenSort = Extract<TokenListSort, 'recent_buys' | 'newest' | 'oldest' | 'market_cap' | 'volume'>
 type TokenWindow = VolumeWindow
@@ -49,6 +57,9 @@ const WINDOWS: Array<{ value: TokenWindow; label: string }> = [
 const GRADUATED_PAGE = 10
 const LIVE_PAGE = 20
 
+/** The feed's own poll, restated to the reader by `Freshness`. */
+const FEED_INTERVAL_MS = 4_000
+
 function isSort(v: string | null): v is TokenSort {
   return SORTS.some((s) => s.value === v)
 }
@@ -61,6 +72,8 @@ function pageOf(v: string | null): number {
 }
 
 export function Explore() {
+  useDocumentMeta({ canonicalPath: '/' })
+
   const [params, setParams] = useSearchParams()
   const [searchOpen, setSearchOpen] = useState(false)
   const now = useNow()
@@ -91,51 +104,68 @@ export function Explore() {
   const counts = live.data?.counts ?? graduated.data?.counts
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
+      <div className="space-y-3 empty:hidden">
+        <WrongChainBanner />
+        <BackendOfflineBanner />
+      </div>
+
+      {/* One line, and a sticker for what the page is *of*. The claim under it
+          has moved to the footnote below the board. */}
+      <header className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
+        <h1 className="text-balance text-xl font-semibold leading-tight tracking-tight sm:text-2xl">
+          Launch a token on {env.chainName}. Trade it before it graduates.
+        </h1>
+        <Clipart name="rocket" float className="hidden size-16 sm:block" />
+      </header>
+
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <SearchTrigger onClick={() => setSearchOpen(true)} className="flex-1" />
-        <Link to="/create" className={cn(buttonVariants({ variant: 'primary' }), 'shrink-0 gap-2')}>
+        {/* Below `sm` the tab bar already carries Create; a full-width lime
+            button above the board would be the same action twice. */}
+        <Link
+          to="/create"
+          className={cn(buttonVariants({ variant: 'primary' }), 'hidden shrink-0 gap-2 sm:inline-flex')}
+        >
           <Plus className="size-4" aria-hidden />
           Create
         </Link>
       </div>
       <CommandSearch open={searchOpen} onClose={() => setSearchOpen(false)} />
 
-      <div className="space-y-3">
-        <WrongChainBanner />
-        <BackendOfflineBanner />
-      </div>
-
       <Section
         title="Graduated"
         count={counts?.graduated}
-        blurb="Tokens that cleared the graduation threshold. Liquidity is locked and the curve is finished."
+        blurb="Cleared the threshold. Liquidity is locked and the curve is finished."
         tokens={graduated.data?.items}
         isLoading={graduated.isLoading}
         isError={graduated.isError}
         emptyTitle="Nothing has graduated yet"
         emptyBody="No token on this factory has reached the threshold. The first one will appear here."
+        emptyClipart="ticket"
         now={now}
-        tinted
         pager={
           <Pagination
             page={gpage}
             pages={Math.max(1, Math.ceil((graduated.data?.total ?? 0) / GRADUATED_PAGE))}
+            total={graduated.data?.total}
+            pageSize={GRADUATED_PAGE}
+            noun="token"
             onChange={(p) => update({ gpage: p === 1 ? null : String(p) })}
           />
         }
       />
 
       <Section
-        title="Explore"
+        title="On the curve"
         count={counts?.live}
-        countLabel="live"
-        blurb={`Tokens still climbing toward graduation on ${env.chainName}. Every one of them can also go to zero.`}
+        blurb={`Still climbing toward graduation. Every one of them can also go to zero.`}
         tokens={live.data?.items}
         isLoading={live.isLoading}
         isError={live.isError}
         emptyTitle="No launches yet"
         emptyBody="Nothing has launched on this factory. Yours would be the first."
+        emptyClipart="telescope"
         now={now}
         controls={
           <div className="flex flex-wrap items-center gap-2">
@@ -150,22 +180,41 @@ export function Explore() {
               value={window}
               onChange={(v) => update({ window: v === 'all' ? null : v, page: null })}
               label="Time window"
+              tone="quiet"
             />
           </div>
+        }
+        freshness={
+          live.dataUpdatedAt > 0 ? (
+            <Freshness
+              updatedAt={live.dataUpdatedAt}
+              intervalMs={FEED_INTERVAL_MS}
+              isFetching={live.isFetching}
+              onRefresh={() => void live.refetch()}
+            />
+          ) : null
         }
         pager={
           <Pagination
             page={page}
             pages={Math.max(1, Math.ceil((live.data?.total ?? 0) / LIVE_PAGE))}
+            total={live.data?.total}
+            pageSize={LIVE_PAGE}
+            noun="token"
             onChange={(p) => update({ page: p === 1 ? null : String(p) })}
           />
         }
       />
 
-      <p className="px-1 text-xs text-muted-foreground">
-        Hoodium does not review, endorse, or rank any token for payment, and issues no token of its own.
-        Ordering above is a plain sort on measured on-chain activity.
-      </p>
+      <div className="space-y-1.5 px-1 text-xs text-muted-foreground">
+        <p>
+          Market cap is the curve's spot price times the fixed supply; FDV on a graduated token is the same
+          figure read from its pool. Ordering above is a plain sort on measured on-chain activity.
+        </p>
+        <p>
+          Hoodium does not review, endorse, or rank any token for payment, and issues no token of its own.
+        </p>
+      </div>
     </div>
   )
 }
@@ -174,49 +223,53 @@ interface SectionProps {
   title: string
   /** Size of the whole set, not of this page. Undefined until the feed answers. */
   count: number | undefined
-  countLabel?: string
   blurb: string
   tokens: TokenListItem[] | undefined
   isLoading: boolean
   isError: boolean
   emptyTitle: string
   emptyBody: string
+  emptyClipart: 'ticket' | 'telescope'
   now: number
   controls?: React.ReactNode
+  freshness?: React.ReactNode
   pager?: React.ReactNode
-  tinted?: boolean
 }
 
+/**
+ * One board. The heading is the small tracked label hoodium.app puts over a
+ * board ("WHERE THIS IS WORKING"), with the set's size beside it in the same
+ * mono the figures use.
+ */
 function Section({
   title,
   count,
-  countLabel,
   blurb,
   tokens,
   isLoading,
   isError,
   emptyTitle,
   emptyBody,
+  emptyClipart,
   now,
   controls,
+  freshness,
   pager,
-  tinted,
 }: SectionProps) {
   const isEmpty = !isLoading && (tokens?.length ?? 0) === 0
 
   return (
-    <section className={cn('rounded-2xl', tinted && 'border border-border bg-muted/20 p-4 sm:p-5')}>
+    <section className="scroll-mt-20">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-section-title">{title}</h2>
+        <div className="min-w-0">
+          <h2 className="flex items-center gap-2 text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            {title}
             {count === undefined ? null : (
-              <span className="num rounded-full bg-muted px-2 py-0.5 text-[12px] text-muted-foreground">
+              <span className="num rounded-full bg-muted px-2 py-0.5 text-[11px] normal-case tracking-normal text-foreground">
                 {count.toLocaleString('en-US')}
-                {countLabel ? ` ${countLabel}` : ''}
               </span>
             )}
-          </div>
+          </h2>
           <p className="mt-1 text-sm text-muted-foreground">{blurb}</p>
         </div>
         {controls}
@@ -226,11 +279,12 @@ function Section({
         {isLoading ? (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
             {[0, 1, 2, 3, 4].map((i) => (
-              <Skeleton key={i} className="h-64 w-full" />
+              <Skeleton key={i} className="h-64 w-full rounded-2xl" />
             ))}
           </div>
         ) : isEmpty ? (
           <Card className="p-8 text-center">
+            <Clipart name={emptyClipart} className="mx-auto mb-4 size-24" />
             <h3 className="text-section-title">{isError ? 'Feed unavailable' : emptyTitle}</h3>
             <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
               {isError
@@ -240,14 +294,19 @@ function Section({
           </Card>
         ) : (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-            {tokens!.map((token) => (
-              <TokenCard key={token.address} token={token} now={now} />
+            {tokens!.map((token, i) => (
+              <TokenCard key={token.address} token={token} now={now} index={i} />
             ))}
           </div>
         )}
       </div>
 
-      {!isEmpty && pager ? <div className="mt-4">{pager}</div> : null}
+      {!isEmpty && (pager || freshness) ? (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0 flex-1">{pager}</div>
+          {freshness}
+        </div>
+      ) : null}
     </section>
   )
 }

@@ -1,3 +1,24 @@
+/*
+ * Typefaces, self-hosted.
+ *
+ * design-system.md 1 specifies Inter and JetBrains Mono, and neither was ever
+ * loaded — the config named them, no font file or import existed, and the CSP
+ * deliberately excludes Google Fonts (`font-src` in index.html, and rightly:
+ * an origin on a signing surface for a face we can ship ourselves). So every
+ * machine without Inter installed — which is most of them — rendered the whole
+ * app in `system-ui`. The app has been wearing the operating system's default
+ * font this entire time, which is the flattest possible reading of a design
+ * system that specifies one.
+ *
+ * Geist rather than a re-hosted Inter: the two faces here have to share a
+ * skeleton, because this interface sets labels in sans directly beside figures
+ * in mono all day, and Geist Sans and Geist Mono were drawn together for that.
+ * Variable, so the 400/500/600 the system already asks for cost one file per
+ * family rather than three.
+ */
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -9,8 +30,20 @@
  * accent earns attention precisely because nothing else competes for it.
  */
 @layer base {
+  /**
+   * `.theme-dark` joins the two root selectors so a subtree can be pinned to
+   * this palette while the page around it is on another.
+   *
+   * It exists for share images. Those are exported as artwork and land in a
+   * chat client or a timeline that knows nothing about the exporter's theme, so
+   * the card has to carry its own — a light-theme user exporting a white card
+   * with chartreuse on it would be shipping the one combination section 2 says
+   * fails contrast. Redeclaring the variables on a class rather than on `:root`
+   * is what lets the rule apply to a subtree, since custom properties inherit.
+   */
   :root,
-  :root[data-theme='dark'] {
+  :root[data-theme='dark'],
+  .theme-dark {
     /* canvas */
     --background: 120 6% 4%;
     --card: 120 4% 7%;
@@ -34,7 +67,18 @@
     --warning: 38 92% 55%;
     --destructive: 0 72% 51%;
 
-    --radius: 0.875rem;
+    /*
+     * The one stop a graded red-to-green scale needs and the semantic tokens do
+     * not supply. Those four sit at hues 4, 38, 75 and 145 — red, amber, the
+     * brand lime, green — which leaves a gap between amber and lime wide enough
+     * that a five-step meter skips a step. This fills it at 52.
+     *
+     * Not a status on its own: nothing should read `caution` as a state the way
+     * `warning` is one. It exists so a scale can be a scale.
+     */
+    --caution: 52 92% 55%;
+
+    --radius: 0.5rem;
   }
 
   /**
@@ -61,6 +105,9 @@
     --up: 145 70% 30%;
     --down: 4 74% 45%;
     --warning: 38 92% 34%;
+    /* Darker than its dark-theme twin for the reason `--warning` is: a 55%
+       yellow on white is barely a colour. Same hue, light-theme lightness. */
+    --caution: 52 92% 34%;
     --destructive: 0 72% 42%;
   }
 
@@ -142,6 +189,48 @@
   }
 
   /**
+   * A surface that hangs off the control that opened it — the account menu, the
+   * notification panel, the position toolbar's overflow menu.
+   *
+   * The point is the `transform-origin`, which is why this class does not set
+   * one: it grows from wherever its call site pins it, and a popover that grows
+   * from its own centre while anchored to a button's right edge is the version
+   * that says nothing about where it came from. Every call site pairs this with
+   * an `origin-*` utility matching the corner it is anchored to.
+   *
+   * 150ms, at the bottom of the dropdown budget. These are conditional renders,
+   * so the element mounts in its `from` state and there is nothing to interrupt
+   * — a keyframe is honest here in a way it would not be on a toggled surface.
+   */
+  .popover-in {
+    animation: popover-in 150ms ease-out;
+  }
+
+  /**
+   * The mobile navigation panel, which drops out from under the bar.
+   *
+   * Its links already carried `.stagger-in` while the panel and the scrim behind
+   * them did not, so the cascade played against a container that had teleported
+   * — the half of the animation that was missing was the half that explains
+   * where the links are.
+   */
+  .panel-in {
+    animation: panel-in 200ms ease-out;
+  }
+
+  /**
+   * A confirmation mark replacing the control that produced it.
+   *
+   * Reserved for actions whose only evidence is this mark. Copying an address
+   * writes to a clipboard nobody can see; without a beat on the tick, the sole
+   * feedback for the whole interaction is an icon that was already there
+   * changing shape between two frames.
+   */
+  .mark-in {
+    animation: mark-in 160ms ease-out;
+  }
+
+  /**
    * A horizontally scrolling region — WA-5.2.
    *
    * `overflow-x: auto` alone is not enough on mobile, and the failure is
@@ -203,6 +292,70 @@
     background: hsl(var(--muted-foreground) / 0.5);
   }
 
+
+  /**
+   * The mark assembling itself — `Logo.tsx`, and only where `animate` is set.
+   *
+   * ── What it is allowed to be ────────────────────────────────────────────────
+   * This sits in a fixed navbar on every route, at 24px. That rules out a loop:
+   * a permanent animation in the corner of every screen is a distraction the
+   * page never stops paying for, and this app asks people to read numbers. So
+   * it plays once, on mount, and then the mark is simply a mark.
+   *
+   * The four pieces arrive around the centre rather than sweeping in from an
+   * edge, because the mark is a single object rather than a row of things: the
+   * body lands first and the blades and crest settle onto it. 70ms apart, 380ms
+   * each, so the whole gesture is over in about 600ms — long enough to read as
+   * assembly, short enough that a reader navigating fast never sees it finish
+   * and never waits for it.
+   *
+   * `transform` and `opacity` only, which are the two properties that composite
+   * off the main thread. Animating `d` would repaint a 3KB path four times a
+   * frame for no visible gain.
+   *
+   * `transform-box: fill-box` is not optional: without it an SVG child takes its
+   * transform origin from the *viewport*, so `scale` about "centre" would throw
+   * each piece across the canvas instead of growing it in place.
+   *
+   * Reduced motion is handled by the global block at the bottom of this file,
+   * which zeroes both duration and delay. `backwards` fill means the `from`
+   * state only applies during the delay, so at zero duration and zero delay the
+   * mark is simply painted, which is the correct degradation.
+   */
+  .logo-animated .logo-piece {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: logo-assemble 380ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+    animation-delay: calc(var(--piece, 0) * 70ms);
+  }
+
+  /**
+   * The hover, which is feedback rather than decoration: the mark is the link
+   * home, and at this size a colour change is the only other channel available
+   * and is spent on the brand already.
+   *
+   * The blades spread a little and the crest lifts — the shape opens. Scoped to
+   * hover on the svg itself so it cannot fire from elsewhere in the bar, and
+   * left off touch, where there is no hover and `:hover` sticks after a tap.
+   */
+  @media (hover: hover) {
+    .logo-animated:hover .logo-piece {
+      transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+
+    /* Selected by what each piece is, not by where it sits: the artwork's
+       subpath order is not the order they animate in, and a future re-export
+       could renumber them without anyone noticing the hover had moved. */
+    .logo-animated:hover [data-piece='blade-left'] {
+      transform: translate(-4%, 2%) rotate(-3deg);
+    }
+
+    .logo-animated:hover [data-piece='blade-right'] {
+      transform: translate(4%, 2%) rotate(3deg);
+    }
+
+  }
+
   /* Progressive blur navbar — design-system.md section 9. */
   .navbar {
     position: fixed;
@@ -244,6 +397,152 @@
   }
 
   /**
+   * The mobile tab bar — the navbar's mirror image at the bottom edge, and the
+   * primary navigation below `md` (design-system.md section 9 governs both).
+   *
+   * ── Why it has no fade layer ─────────────────────────────────────────────
+   * `.navbar-fade` exists because the top bar floats over content at rest and a
+   * hard blur edge across the middle of a scrolling page is visible. Section 9
+   * also caps blurred viewport height at ~120px, and the top bar already spends
+   * 112 of it. A second fade would double the per-frame `backdrop-filter` cost
+   * on exactly the devices this bar is for, to soften an edge that sits against
+   * the bottom of the screen where nothing scrolls past it. The hairline does
+   * that job for free.
+   *
+   * The border is permanent rather than scroll-dependent for the same reason:
+   * content is always underneath a bottom bar — there is no "at rest" state
+   * where it is floating over nothing — so a border that appeared on scroll
+   * would be feedback about something that never changes.
+   */
+  .tabbar {
+    /*
+     * The row's measurements, declared once because two things need to agree on
+     * them: the tabs themselves, and the pill that slides between them. The
+     * pill is positioned rather than laid out — it has to be, to move — so
+     * without shared values its vertical offset would be a magic number that
+     * silently stops matching the day a label's size changes.
+     */
+    --tab-row-h: 3.5rem;
+    --tab-icon-h: 1.75rem;
+    --tab-gap: 0.25rem;
+    --tab-label-h: 0.6875rem;
+
+    position: fixed;
+    inset-inline: 0;
+    bottom: 0;
+    /*
+     * Below the disclosure's scrim (z-40) rather than beside the navbar (z-50).
+     * An overlay that dims the whole page and leaves one bar lit and tappable
+     * looks like a rendering fault; under the scrim, the bar dims with
+     * everything else and a tap on it closes the panel, which is what a tap
+     * anywhere on a scrim does. Still above page content, which is what the
+     * index buys.
+     */
+    z-index: 30;
+    /* Same clamp, same reason as `.navbar`: on mobile Chrome the initial
+       containing block grows to the widest content once anything overflows. */
+    max-width: 100vw;
+
+    /* The bar's own 56px, plus whatever the home indicator claims underneath
+       it. Padding rather than height so the row of targets keeps its size and
+       only the dead space below it grows. */
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+
+    background: hsl(var(--background) / 0.85);
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+    will-change: backdrop-filter;
+
+    border-top: 1px solid hsl(var(--border) / 0.6);
+  }
+
+  /**
+   * The lit tab's pill — one element that travels, not four that fade.
+   *
+   * Four pills crossfading tells you which tab is lit. One that moves tells you
+   * *from where*, which is the thing a bottom bar is otherwise bad at: the tabs
+   * are a row of near-identical shapes at the edge of vision, and a mark that
+   * arrives without having come from anywhere reads as the screen having
+   * changed under you rather than as a place you moved to.
+   *
+   * It is a sibling of the tabs rather than a child of one, since it has to
+   * outlive the tab it is leaving. `width` is a share of the bar so it lands on
+   * a column whatever the count, and `translateX` is in multiples of its own
+   * width, so moving one column is exactly `100%` — no measuring, no resize
+   * observer, and it survives a rotation with no JavaScript at all.
+   *
+   * Both the pill and the tabs are positioned with `z-index: auto`, so paint
+   * order is DOM order: the pill is the first child and the tabs come after it,
+   * which is what keeps the icons on top of it.
+   */
+  .tab-indicator {
+    position: absolute;
+    left: 0;
+    width: calc(100% / var(--tab-count, 4));
+    /* The same centring the tabs get from `justify-center`, worked out from the
+       stack the tabs are built from rather than guessed at. */
+    top: calc(
+      (var(--tab-row-h) - (var(--tab-icon-h) + var(--tab-gap) + var(--tab-label-h))) / 2
+    );
+    height: var(--tab-icon-h);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+
+    /*
+     * 260ms and a decelerating curve: long enough to be followed by the eye,
+     * short enough that the second tap of a double-back does not queue behind
+     * it. `transform` and `opacity` are the two properties that animate off the
+     * main thread — a pill animated with `left` would jank against the very
+     * `backdrop-filter` it slides over.
+     */
+    transition:
+      transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      opacity 160ms ease-out;
+  }
+
+  .tab-indicator::before {
+    content: '';
+    display: block;
+    height: 100%;
+    width: 3rem;
+    border-radius: 999px;
+    /* `muted`, not the accent — section 3 keeps chartreuse off anything a
+       reader could mistake for a semantic mark. */
+    background: hsl(var(--muted) / 0.6);
+  }
+
+  /**
+   * The icon's own half of the transition.
+   *
+   * Weight rather than colour alone, so the lit tab survives a grayscale pass
+   * (WA-5.5). Set in CSS rather than through lucide's `strokeWidth` prop
+   * because a presentation attribute cannot be transitioned — swapping it made
+   * the icon snap to bold while the pill was still travelling.
+   */
+  .tab-icon {
+    stroke-width: 1.8;
+    transition:
+      stroke-width 200ms ease-out,
+      transform 120ms ease-out;
+  }
+
+  .tab-icon[data-active='true'] {
+    stroke-width: 2.4;
+  }
+
+  /* The press. A tab bar is the one surface on a phone that is tapped without
+     being looked at, and a target that acknowledges the finger is how you know
+     it landed before the page has changed. */
+  .tabbar a:active .tab-icon,
+  .tabbar button:active .tab-icon {
+    transform: scale(0.88);
+  }
+
+  /**
    * Layer 2 — the fade. Extends past the bar and dissolves, so there is no hard
    * edge where the blur stops. 112px is the cap: `backdrop-filter` recomposites
    * on every scroll frame, and a taller layer is the likeliest way to miss the
@@ -267,7 +566,8 @@
 
 /* Opaque fallback, never a degraded blur (design-system.md section 9.2). */
 @supports not (backdrop-filter: blur(1px)) {
-  .navbar {
+  .navbar,
+  .tabbar {
     background: hsl(var(--background) / 0.97);
   }
   .navbar-fade {
@@ -276,12 +576,31 @@
 }
 
 @media (prefers-reduced-transparency: reduce) {
-  .navbar {
+  .navbar,
+  .tabbar {
     background: hsl(var(--background));
     backdrop-filter: none;
   }
   .navbar-fade {
     display: none;
+  }
+}
+
+/**
+ * One piece of the mark arriving. See `.logo-animated` above.
+ *
+ * The overshoot is in the easing rather than in a third keyframe: a scale that
+ * passes 1 and comes back reads as bounce, which is the wrong register for a
+ * brand mark on a trading surface.
+ */
+@keyframes logo-assemble {
+  from {
+    opacity: 0;
+    transform: scale(0.82) rotate(-6deg);
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 
@@ -293,6 +612,119 @@
   to {
     opacity: 1;
     transform: none;
+  }
+}
+
+@keyframes popover-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes mark-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/**
+ * The modal's entry and exit — `Modal.tsx`.
+ *
+ * Every dialog in this app confirms something irreversible, and it arrived and
+ * left in a single frame: a blurred backdrop and a signature prompt appearing
+ * with no transit is the one moment in the product where the interface is
+ * asking for care and showing none.
+ *
+ * ── Why this is not a keyframe like the rules above ──────────────────────────
+ * The other surfaces here are conditional renders — they mount in their `from`
+ * state, so an animation is all they need. A `<dialog>` is different: it stays
+ * in the DOM and toggles `display`, so an entry keyframe would play and the
+ * *exit* would still be instant, which is worse than symmetric absence.
+ *
+ * `@starting-style` supplies the entry values that `display: none` otherwise
+ * makes untransitionable, and `allow-discrete` holds `display` and `overlay`
+ * open for the exit's duration instead of yanking the element out of the top
+ * layer on frame one. Both are required; either alone animates one direction.
+ *
+ * Unlayered on purpose. `@starting-style` competes on the cascade like any
+ * other rule, so declaring it outside `@layer` keeps the starting values above
+ * the base rule below regardless of what Tailwind emits into the layers.
+ *
+ * Degradation is the current behaviour, not a broken one: a browser without
+ * `@starting-style` drops the entry (the dialog is already `display: none`, so
+ * nothing transitions from it), and one that rejects `allow-discrete`
+ * invalidates the whole `transition` shorthand and drops the exit. Both land on
+ * "appears instantly", which is what shipped before this block.
+ *
+ * Scale only, no translate — a modal is centred and stays centred; a dialog
+ * that also rises reads as a sheet that stopped halfway.
+ */
+.modal-dialog {
+  opacity: 0;
+  transform: scale(0.97);
+  transition:
+    opacity 150ms ease-in,
+    transform 150ms ease-in,
+    overlay 150ms ease-in allow-discrete,
+    display 150ms ease-in allow-discrete;
+}
+
+.modal-dialog[open] {
+  opacity: 1;
+  transform: none;
+  /* Entry is the slower half. Arriving is a change the reader has to absorb;
+     leaving is one they already decided on. */
+  transition-duration: 200ms;
+  transition-timing-function: ease-out;
+}
+
+.modal-dialog::backdrop {
+  opacity: 0;
+  transition:
+    opacity 150ms ease-in,
+    overlay 150ms ease-in allow-discrete,
+    display 150ms ease-in allow-discrete;
+}
+
+.modal-dialog[open]::backdrop {
+  opacity: 1;
+  transition-duration: 200ms;
+  transition-timing-function: ease-out;
+}
+
+/* Two blocks, not one selector list: `::backdrop` is unknown to browsers that
+   predate it, and a list containing it would drop the dialog's own rule too. */
+@starting-style {
+  .modal-dialog[open] {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+@starting-style {
+  .modal-dialog[open]::backdrop {
+    opacity: 0;
   }
 }
 
@@ -332,6 +764,28 @@
   .pad-safe-x {
     padding-left: max(1rem, env(safe-area-inset-left));
     padding-right: max(1rem, env(safe-area-inset-right));
+  }
+
+  /**
+   * The main column's bottom gutter, sized to whatever is fixed over it.
+   *
+   * Below `md` that is the tab bar — 56px of it, plus the home indicator
+   * underneath — and the last row of a table has to clear both, or the final
+   * page of a board ends underneath the navigation and reads as truncated. The
+   * 1.5rem on top is breathing room, not padding for its own sake: a row that
+   * stops exactly at the hairline looks clipped even when it is whole.
+   *
+   * At `md` the bar is not rendered and this falls back to the gutter the page
+   * always had.
+   */
+  .pad-main-bottom {
+    padding-bottom: calc(5rem + env(safe-area-inset-bottom));
+  }
+
+  @media (min-width: 768px) {
+    .pad-main-bottom {
+      padding-bottom: max(6rem, calc(4rem + env(safe-area-inset-bottom)));
+    }
   }
 }
 

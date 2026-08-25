@@ -6,11 +6,11 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { env } from '@/config/env'
 import { useTokenCandles } from '@/hooks/useLaunchpad'
 import type { CandleInterval, TokenDetail } from '@/lib/launchpad-api'
-import { formatAmount, formatPrice, fromBaseUnits, isZero, usdToMoney } from '@/lib/money'
+import { formatPrice, fromBaseUnits, isZero, usdToMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
 
 /**
- * Price and the four figures a buyer scans before anything else.
+ * The price, over time.
  *
  * The series is the candles' closes, drawn as an area. On a bonding curve
  * every trade *is* a price change, so the finest interval is the honest one;
@@ -22,6 +22,9 @@ import { cn } from '@/lib/utils'
  * against. The price figure itself comes from `curveState.price`, the exact
  * spot price in quote base units; the last close is only the fallback for a
  * token whose curve state has not been read yet.
+ *
+ * The four figures that used to head this card live in the tile row above it
+ * on the token page now, where hoodium.app puts a page's figures.
  */
 const INTERVALS: Array<{ value: CandleInterval; label: string }> = [
   { value: '5m', label: '5M' },
@@ -58,21 +61,19 @@ export function TokenChartCard({ token }: { token: TokenDetail }) {
   const changePct = first !== undefined && last !== undefined && first > 0 ? ((last - first) / first) * 100 : null
 
   return (
-    <Card featured className="p-5">
-      <dl className="grid grid-cols-2 gap-4 border-b border-border pb-4 sm:grid-cols-4">
-        <Stat label="Price">{latestPrice ? formatPrice(latestPrice, '$') : '—'}</Stat>
-        <Stat label="Market cap">{formatAmount(usdToMoney(token.marketCapUsd), { compact: true, prefix: '$' })}</Stat>
-        <Stat label={`Price in ${env.quoteSymbol}`}>{latestPrice ? formatPrice(latestPrice) : '—'}</Stat>
-        <Stat label="Market">{graduated ? 'Uniswap v3 pool' : 'Bonding curve'}</Stat>
-      </dl>
-
-      <div className="mt-4 flex flex-wrap items-baseline justify-between gap-3">
-        <div>
-          <p className="num text-2xl font-medium">{latestPrice ? formatPrice(latestPrice, '$') : '—'}</p>
+    <Card featured className="min-w-0 overflow-hidden p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            {graduated ? 'Price · Uniswap v3 pool' : 'Price · bonding curve'}
+          </p>
+          <p className="num mt-1 text-2xl font-medium leading-none tracking-tight">
+            {latestPrice ? formatPrice(latestPrice, '$') : '—'}
+          </p>
           {changePct !== null && (
             <p
               className={cn(
-                'num text-sm',
+                'num mt-1.5 text-sm',
                 changePct > 0 ? 'text-up' : changePct < 0 ? 'text-down' : 'text-muted-foreground',
               )}
             >
@@ -83,7 +84,13 @@ export function TokenChartCard({ token }: { token: TokenDetail }) {
           )}
         </div>
 
-        <SegmentedControl segments={INTERVALS} value={interval} onChange={setInterval} label="Chart interval" />
+        <SegmentedControl
+          segments={INTERVALS}
+          value={interval}
+          onChange={setInterval}
+          label="Chart interval"
+          tone="quiet"
+        />
       </div>
 
       {chart.isLoading && !chart.data ? (
@@ -99,14 +106,5 @@ export function TokenChartCard({ token }: { token: TokenDetail }) {
         />
       )}
     </Card>
-  )
-}
-
-function Stat({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-label text-muted-foreground">{label}</dt>
-      <dd className="num mt-0.5 truncate text-[17px] font-medium">{children}</dd>
-    </div>
   )
 }
