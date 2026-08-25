@@ -1,0 +1,75 @@
+{
+  "name": "@hoodium/core",
+  "version": "0.1.6",
+  "description": "Server-side foundation shared by the Hoodium API and worker — config, mainnet guard, storage, RPC, notification, position reads",
+  "type": "module",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "node": ">=20.11"
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./config": {
+      "types": "./dist/config/index.d.ts",
+      "default": "./dist/config/index.js"
+    },
+    "./lib": {
+      "types": "./dist/lib/index.d.ts",
+      "default": "./dist/lib/index.js"
+    },
+    "./db": {
+      "types": "./dist/db/index.d.ts",
+      "default": "./dist/db/index.js"
+    },
+    "./chain": {
+      "types": "./dist/chain/index.d.ts",
+      "default": "./dist/chain/index.js"
+    },
+    "./notify": {
+      "types": "./dist/notify/index.d.ts",
+      "default": "./dist/notify/index.js"
+    },
+    "./positions": {
+      "types": "./dist/positions/index.d.ts",
+      "default": "./dist/positions/index.js"
+    },
+    "./launchpad": {
+      "types": "./dist/launchpad/index.d.ts",
+      "default": "./dist/launchpad/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "@hoodium/shared": "git+https://github.com/Hoodium-HQ/hoodium_shared.git#v0.1.4",
+    "@sentry/node": "^8.42.0",
+    "dotenv": "^16.4.7",
+    "mongoose": "^8.9.2",
+    "pino": "^9.5.0",
+    "qrcode": "^1.5.4",
+    "zod": "^3.24.1"
+  },
+  "peerDependencies": {
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/qrcode": "^1.5.6",
+    "typescript": "^5.7.2",
+    "viem": "^2.21.55",
+    "vitest": "^2.1.8"
+  }
+}

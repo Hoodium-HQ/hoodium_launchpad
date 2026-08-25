@@ -1,0 +1,59 @@
+{
+  "name": "@hoodium/shared",
+  "version": "0.1.4",
+  "description": "Types, ABIs, tick math and curve math shared by the Hoodium backend and web app",
+  "type": "module",
+  "license": "UNLICENSED",
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./abi": {
+      "types": "./dist/abi/index.d.ts",
+      "default": "./dist/abi/index.js"
+    },
+    "./money": {
+      "types": "./dist/money/index.d.ts",
+      "default": "./dist/money/index.js"
+    },
+    "./tickmath": {
+      "types": "./dist/tickmath/index.d.ts",
+      "default": "./dist/tickmath/index.js"
+    },
+    "./performance": {
+      "types": "./dist/performance/index.d.ts",
+      "default": "./dist/performance/index.js"
+    },
+    "./curve": {
+      "types": "./dist/curve/index.d.ts",
+      "default": "./dist/curve/index.js"
+    },
+    "./types": {
+      "types": "./dist/types/index.d.ts",
+      "default": "./dist/types/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "decimal.js": "^10.4.3"
+  },
+  "peerDependencies": {
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "viem": "^2.21.55",
+    "vitest": "^2.1.8"
+  }
+}
