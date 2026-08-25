@@ -118,3 +118,109 @@ contract FeeVaultTest is Test {
         }
     }
 }
+
+/// AUDIT L3 — confirmations can be withdrawn and proposals expire.
+contract FeeVaultLifecycleTest is Test {
+    MockUSDG usdg;
+    FeeVault vault;
+
+    address s1 = makeAddr("s1");
+    address s2 = makeAddr("s2");
+    address s3 = makeAddr("s3");
+    address payee = makeAddr("payee");
+
+    function setUp() public {
+        usdg = new MockUSDG();
+        address[] memory owners = new address[](3);
+        owners[0] = s1;
+        owners[1] = s2;
+        owners[2] = s3;
+        vault = new FeeVault(owners, 2);
+        usdg.mint(address(vault), 10_000e6);
+    }
+
+    function test_revokeConfirmation_dropsBelowQuorum() public {
+        vm.prank(s1);
+        uint256 id = vault.propose(address(usdg), payee, 1_000e6);
+        vm.prank(s2);
+        vault.confirm(id);
+        assertEq(vault.withdrawal(id).confirmations, 2);
+
+        vm.prank(s2);
+        vault.revokeConfirmation(id);
+        assertEq(vault.withdrawal(id).confirmations, 1);
+        assertFalse(vault.hasConfirmed(id, s2));
+
+        vm.prank(s1);
+        vm.expectRevert(abi.encodeWithSelector(FeeVault.ThresholdNotMet.selector, 1, 2));
+        vault.execute(id);
+
+        // A revoked confirmation can be given again.
+        vm.prank(s2);
+        vault.confirm(id);
+        vm.prank(s1);
+        vault.execute(id);
+        assertEq(usdg.balanceOf(payee), 1_000e6);
+    }
+
+    function test_revokeConfirmation_requiresAStandingConfirmation() public {
+        vm.prank(s1);
+        uint256 id = vault.propose(address(usdg), payee, 1e6);
+        vm.prank(s2);
+        vm.expectRevert(FeeVault.NotConfirmed.selector);
+        vault.revokeConfirmation(id);
+        vm.prank(makeAddr("outsider"));
+        vm.expectRevert(FeeVault.NotOwner.selector);
+        vault.revokeConfirmation(id);
+    }
+
+    function test_revokeConfirmation_afterExecution_reverts() public {
+        vm.prank(s1);
+        uint256 id = vault.propose(address(usdg), payee, 1e6);
+        vm.prank(s2);
+        vault.confirm(id);
+        vm.prank(s1);
+        vault.execute(id);
+        vm.prank(s1);
+        vm.expectRevert(FeeVault.AlreadyExecuted.selector);
+        vault.revokeConfirmation(id);
+    }
+
+    function test_expiredProposal_cannotBeConfirmedOrExecuted() public {
+        vm.prank(s1);
+        uint256 id = vault.propose(address(usdg), payee, 1e6);
+        vm.prank(s2);
+        vault.confirm(id);
+        uint256 deadline = vault.expiresAt(id);
+        assertEq(deadline, block.timestamp + vault.PROPOSAL_TTL());
+
+        vm.warp(deadline + 1);
+        vm.prank(s3);
+        vm.expectRevert(abi.encodeWithSelector(FeeVault.ProposalExpired.selector, id, deadline));
+        vault.confirm(id);
+        vm.prank(s1);
+        vm.expectRevert(abi.encodeWithSelector(FeeVault.ProposalExpired.selector, id, deadline));
+        vault.execute(id);
+        assertEq(usdg.balanceOf(payee), 0);
+
+        // The owners re-propose and the new proposal has its own clock.
+        vm.prank(s1);
+        uint256 id2 = vault.propose(address(usdg), payee, 1e6);
+        vm.prank(s2);
+        vault.confirm(id2);
+        vm.prank(s1);
+        vault.execute(id2);
+        assertEq(usdg.balanceOf(payee), 1e6);
+    }
+
+    function test_proposalAtTheDeadline_isStillLive() public {
+        vm.prank(s1);
+        uint256 id = vault.propose(address(usdg), payee, 1e6);
+        vm.prank(s2);
+        vault.confirm(id);
+        vm.warp(vault.expiresAt(id));
+        vm.prank(s1);
+        vault.execute(id);
+        assertEq(usdg.balanceOf(payee), 1e6);
+    }
+}

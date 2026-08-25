@@ -1,8 +1,80 @@
 # Internal security review — 2026-08-25
 
+## Status (updated 2026-08-25, after the fix pass)
+
+Every Critical, High and Medium finding below is **fixed**, each with a
+regression test that runs the original attack and asserts it now reverts or
+yields nothing. The Lows are fixed except L7, which is accepted and documented.
+Suite: **146 tests passing** (`forge test`, 8 fork tests skipped without an
+RPC) plus **8 fork tests passing** against the real Robinhood Chain Uniswap v3
+(`forge test --match-contract ForkGraduation --fork-url https://rpc.mainnet.chain.robinhood.com`).
+
+| Finding | Status | Where | Regression tests |
+|---|---|---|---|
+| C1 pre-initialised pool drains the raise | **fixed** | `GraduationManager._ensurePool/_reprice/_requireWithinBand/uniswapV3SwapCallback`, 99% `amount*Min`, pull-based `dustOf`/`pullDust` | `PoolPreInitAudit`: `test_regression_creatorPreInitsPoolAtHostilePrice_getsNothing`, `test_regression_preInitOtherDirection_lpTokensStayInThePool`, `test_regression_hostilePriceWithLiquidity_graduationReverts`; `PoolPrePriming`: `test_regression_prePrimedPool_thirdPartyCannotDrainReserve`, `test_regression_prePrimedPool_creatorReceivesNoReserveAsDust`, `test_regression_prePrimedLiquidPool_blocksOnlyUntilArbitraged`; `CurveEconomics.test_regression_F1_preInitialisedPoolAtBound_isRepricedNotRefunded`; fork: `test_fork_preInitialisedPool_tokenCheap_isRepriced`, `test_fork_preInitialisedPool_tokenExpensive_isRepriced`, `test_fork_preInitialisedPoolWithLiquidity_reverts`, `test_fork_outOfRangeLiquidityInThePath_reverts`, `test_fork_preInitialisedPoolInsideTheBand_isAccepted` |
+| H1 per-call snipe/dev-buy caps | **fixed** | `BondingCurve._buy` (`boughtInWindow`, cumulative per address; dev buy counted) | `CurveEconomics`: `test_regression_F3_contractLoopIsCappedPerAddressInTheWindow`, `test_regression_F3_loopWithoutDevBuy_stopsAtOnePercent`; `BondingCurveTest.test_antiSnipe_cumulativeBuysPerAddressAreCapped`; `FactoryTest.test_devBuy_consumesTheCreatorsWindowAllowance` |
+| H2 dust sell blocks `graduate()` | **fixed** | `BondingCurve.sell` reverts `CurveComplete`; `_buy` calls `_graduate` on completion; `graduate()` kept for dev-buy completion | `CurveEconomics`: `test_regression_F2_dustSellCannotBlockGraduation`, `test_regression_F2_completedCurveRefusesSells`; `TrustBoundaries.test_regression_graduate_notFrontRunnableByTinySell`; `GraduationTest.test_devBuyCompletedCurve_graduatesPermissionlessly` |
+| H3 pool opens 41% below the curve | **fixed** | `HoodiumFactory` constructor derives `virtualUsdg` (and `virtualTokens`) from the allocations and target for price continuity, re-checks to 0.5%; `virtualUsdg` is no longer a parameter (23,000 USDG with defaults) | `CurveEconomics.test_regression_F4_poolOpensAtCurveClosingPrice`; `FactoryTest`: `test_virtualUsdgDerivedForPriceContinuity`, `test_virtualUsdgAccountsForTheGraduationFee`, `test_factory_rejectsAllocationsWithoutContinuity`; `GraduationTest.test_poolOpensAtTheCurvesClosingPrice`; fork `test_fork_tokenIsToken0/1` |
+| M1 `migrate`/locker trust any caller | **fixed** | `GraduationManager.migrate` requires `factory.curveOf(token) == msg.sender` (immutable `factory`, precomputed); `LPLocker.onERC721Received` requires `from == graduationManager`; factory and manager constructors verify the pairing | `TrustBoundaries`: `test_regression_migrate_rejectsAnyCallerWithAnyToken`, `test_regression_migrate_rejectsRealTokenFromANonCurve`, `test_regression_rogueCurve_cannotReachRealManager`; `LPLockerAudit.test_regression_strangerCannotLockAPositionLabelledWithSomeoneElsesToken`; `GraduationTest.test_locker_rejectsPositionsNotSentByTheGraduationManager`; `FactoryTest.test_factory_rejectsAManagerPairedWithAnotherFactory`; fork `test_fork_migrate_rejectsStrangers` |
+| M2 USDG pushed to third parties in `graduate` | **fixed** | `BondingCurve._graduate` accrues the fee to `platformFeesAccrued`; manager credits dust to `dustOf` (pull) | `GraduationAtomicity.test_regression_M2_graduationPushesNothingToVaultOrCreator` (vault and creator transfers made to revert; graduation still succeeds); `GraduationTest`: `test_graduationFee_isClaimableToTheVaultAfterwards`, `test_migrationDust_isCreditedForTheCreatorToPull` |
+| L1 dev-buy overshoot stranded | **fixed** | `HoodiumFactory._devBuy` forwards the leftover to the creator; `curveOf` set before the dev buy | `TrustBoundaries.test_regression_devBuyRefund_returnedToCreator`; `FactoryTest.test_devBuy_overshootIsRefundedToTheCreator` |
+| L2 stranded beneficiary strands protocol fees | **fixed** | `LPLocker.sweepProtocolFees` (permissionless; protocol share to vault, creator share credited in `creatorOwed0/1`) | `LPLockerAudit.test_regression_contractCreatorWithoutCallPath_protocolShareStillFlows`; `GraduationTest.test_lockedPosition_anyoneCanSweepTheProtocolShare`; `LPLockerAudit.testFuzz_split_conservesAcrossSweepAndCollect` |
+| L3 no revoke / no expiry | **fixed** | `FeeVault.revokeConfirmation`, `PROPOSAL_TTL = 30 days`, `expiresAt` | `FeeVaultAudit`: `test_regression_staleProposal_cannotExecuteYearsLater`, `test_regression_compromisedSignersConfirmation_isRevocable`; `FeeVaultLifecycleTest` (5 tests) |
+| L4 threshold == owners | **fixed in deploy, documented in contract** | `Deploy.s.sol` refuses unless `ALLOW_FULL_THRESHOLD=true` | `FeeVaultAudit.test_thresholdEqualsOwners_oneLostKey_locksFundsForever` (documents the contract-level behaviour) |
+| L5 no deadline on trades | **fixed** | `buy(usdgIn, minOut, deadline)`, `sell(tokensIn, minOut, deadline)` | `BondingCurveTest`: `test_buy_pastDeadline_reverts`, `test_sell_pastDeadline_reverts`, `test_deadlineAtCurrentTimestamp_isAccepted` |
+| L6 chain-id guard opt-in; wrong RPC host | **fixed** | `EXPECTED_CHAIN_ID` required in `Deploy.s.sol`; `.env.example` → `https://rpc.mainnet.chain.robinhood.com` | — (script) |
+| L7 forced ETH stranded in `FeeVault` | **accepted** | The vault only ever handles USDG; a recovery path for an asset it never receives is more surface than it is worth | `FeeVaultAudit.test_forcedEth_isStrandedForever` (documents it) |
+| Info: vacuous `test_reentry_intoGraduate_isBlocked` | **fixed** | Reentrancy hook now fires mid-migration (`armAfter`), the outer call must succeed | `ReentrancyTest`: `test_reentry_intoGraduate_isBlocked`, `test_reentry_intoBuy_duringGraduation_isBlocked`, `test_reentry_intoSell_duringGraduation_isBlocked` |
+| Info: price-blind mocks | **fixed** | `test/mocks/MockUniswap.sol` is price-aware (LiquidityAmounts full-range maths, zero-liquidity `swap`, in-range `liquidity`); the PoC mocks were unified into it | whole suite |
+
+**Residual, documented (not a defect):** a pool primed *with liquidity* at a
+hostile price — or an out-of-range position in the path between the primed
+price and the fair one — makes the completing buy revert
+(`PoolPriceManipulated` / `UnexpectedSwapPayment`) until the price is back
+inside the band. Such liquidity is a mispriced order against a known fair
+price, i.e. an arbitrage anyone can take, so graduation is delayed at the
+attacker's expense, never broken. Covered by
+`test_regression_prePrimedLiquidPool_blocksOnlyUntilArbitraged` and the two fork
+tests above; explained in `GraduationManager`'s header.
+
+**Also accepted:** the anti-snipe window is per *address*; splitting across
+addresses is still possible (each needs its own USDG and gets its own 1%).
+Graduation from a dev buy that completes the curve outright is only reachable
+with `devBuyMaxBps` raised above the curve share (continuity forces the curve to
+hold >50% of supply, so the shipped 5% cap can never sell it out).
+
+**Independent verification (2026-08-25, after the fix pass):** a separate
+reviewer attacked the new code specifically (re-price swap and callback, band
+vs fill floor in both token orderings on the real chain, auto-graduation
+reentrancy and gas, the per-address window, the derived reserves under fuzz,
+the precomputed pairing, dust/sweep/vault accounting). No Critical or High
+remain; 156 local + 16 fork tests pass (`test/verify/`). Two residuals:
+
+- **Medium (liveness):** a full-range position of ~$1 of tokens and 1000 wei of
+  USDG at a hostile price makes `liquidity() != 0`, so every plain completing
+  `buy` reverts `PoolPriceManipulated`. Re-pricing through it is profitable for
+  whoever does it, but the amounts scale with the attacker's liquidity and can
+  be driven below gas cost, so it can persist until someone fixes atomically.
+  Proved `test_verify_dustFullRangePosition_griefsCompletingBuy_atomicFixWins`,
+  which also shows an atomic fix-then-buy wins deterministically. Closed by the
+  permissionless `GraduationHelper` (see below) and UI routing.
+- **Info:** the completing buy on a fresh pool costs ~5.6M gas (1.06M with a
+  pre-existing pool). Wallets estimate this correctly; the UI must never
+  hard-code a limit from a normal buy.
+
+**An external audit is still required before real money.** This review is
+internal; the fixes above touch exactly the code an auditor will spend most of
+their time on (the manager's re-pricing swap and band, the completing-buy
+graduation, the forward-referenced constructor pairing), and none of it has
+been read by anyone outside the project.
+
+---
+
+## Original verdict (2026-08-25, before the fix pass)
+
 **Verdict: NOT safe to deploy as-is.** One Critical, three High, two Medium
-and a handful of Low findings. Every Critical/High has a passing proof-of-concept
-test under `test/audit/` (run `forge test --match-path 'test/audit/*'`), and
+and a handful of Low findings. Every Critical/High had a passing proof-of-concept
+test under `test/audit/` (the same files now hold the regression tests), and
 the Critical was reproduced on a fork of the real Robinhood Chain Uniswap v3
 (`test/ForkGraduation.t.sol`, run with `--fork-url`).
 

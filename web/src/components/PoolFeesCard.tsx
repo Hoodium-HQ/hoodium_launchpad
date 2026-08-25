@@ -27,9 +27,16 @@ import { formatAmount, fromBaseUnits } from '@/lib/money'
  * The locker is found on-chain and the split is read from it, never typed here.
  * Our API contributes exactly one thing: `lpTokenId`, a pointer to which locked
  * position backs this token.
+ *
+ * Two ways fees leave the position. `collectFees` (creator only) pays the
+ * creator their share and the vault its own. `sweepProtocolFees` (anyone) does
+ * the same collection but only *pays* the protocol; the creator's share is
+ * credited to `creatorOwed0/1` for them to collect later. That is what keeps a
+ * creator with no call path — a contract, a lost key — from stranding the
+ * protocol's share along with their own.
  */
 export function PoolFeesCard({ token }: { token: TokenDetail }) {
-  const { address } = useAccount()
+  const { address, isConnected } = useAccount()
   const tx = useTransaction()
 
   const lpTokenId = token.lpTokenId
@@ -52,6 +59,22 @@ export function PoolFeesCard({ token }: { token: TokenDetail }) {
     query: { enabled: lockerReady },
   })
 
+  // The creator's share already collected by a sweep and waiting to be paid.
+  const { data: owed0, refetch: refetchOwed0 } = useReadContract({
+    address: locker,
+    abi: lpLockerAbi,
+    functionName: 'creatorOwed0',
+    args: [tokenId],
+    query: { enabled: lockerReady, refetchInterval: 15_000 },
+  })
+  const { data: owed1, refetch: refetchOwed1 } = useReadContract({
+    address: locker,
+    abi: lpLockerAbi,
+    functionName: 'creatorOwed1',
+    args: [tokenId],
+    query: { enabled: lockerReady, refetchInterval: 15_000 },
+  })
+
   const isBeneficiary = Boolean(address && beneficiary && address.toLowerCase() === beneficiary.toLowerCase())
 
   /*
@@ -71,6 +94,12 @@ export function PoolFeesCard({ token }: { token: TokenDetail }) {
     query: { enabled: lockerReady && isBeneficiary, refetchInterval: 15_000 },
   })
 
+  const refetchAll = () => {
+    void refetchOwed0()
+    void refetchOwed1()
+    if (isBeneficiary) void refetchClaimable()
+  }
+
   if (!enabled) return null
 
   /*
@@ -83,6 +112,9 @@ export function PoolFeesCard({ token }: { token: TokenDetail }) {
   const tokenAmount = tokenIsToken0 ? amount0 : amount1
   const quoteAmount = tokenIsToken0 ? amount1 : amount0
   const hasClaimable = tokenAmount > 0n || quoteAmount > 0n
+  const owedToken = tokenIsToken0 ? (owed0 ?? 0n) : (owed1 ?? 0n)
+  const owedQuote = tokenIsToken0 ? (owed1 ?? 0n) : (owed0 ?? 0n)
+  const hasOwed = owedToken > 0n || owedQuote > 0n
 
   const claim = async () => {
     if (!locker) return
@@ -92,7 +124,18 @@ export function PoolFeesCard({ token }: { token: TokenDetail }) {
       functionName: 'collectFees',
       args: [tokenId],
     })
-    if (hash) void refetchClaimable()
+    if (hash) refetchAll()
+  }
+
+  const sweep = async () => {
+    if (!locker) return
+    const hash = await tx.execute({
+      address: locker,
+      abi: lpLockerAbi,
+      functionName: 'sweepProtocolFees',
+      args: [tokenId],
+    })
+    if (hash) refetchAll()
   }
 
   return (
@@ -125,8 +168,9 @@ export function PoolFeesCard({ token }: { token: TokenDetail }) {
             </span>
             <span className="text-muted-foreground">
               {' '}
-              — set when the pool was created and immutable. Only the creator can trigger a
-              collection; the protocol is paid when they claim, never instead of them.
+              — set when the pool was created and immutable. The creator collects both shares in one
+              call; anyone may sweep the protocol's share, and the creator's part of that sweep is held for
+              them on the locker until they collect.
             </span>
           </>
         )}
@@ -135,13 +179,18 @@ export function PoolFeesCard({ token }: { token: TokenDetail }) {
       {isBeneficiary ? (
         <>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <Figure label={`Your share · ${token.symbol}`}>
+            <Figure label={`Claimable · ${token.symbol}`}>
               {formatAmount(fromBaseUnits(tokenAmount, 18), { dp: 4 })}
             </Figure>
-            <Figure label={`Your share · ${env.quoteSymbol}`}>
+            <Figure label={`Claimable · ${env.quoteSymbol}`}>
               {formatAmount(fromBaseUnits(quoteAmount, env.quoteDecimals), { dp: 4 })}
             </Figure>
           </div>
+          {/* Claimable (a simulated collect) already includes what a sweep set aside; this shows that part on its own. */}
+          <p className="num mt-2 text-label text-muted-foreground">
+            Held for you from sweeps: {formatAmount(fromBaseUnits(owedToken, 18), { dp: 4 })} {token.symbol} ·{' '}
+            {formatAmount(fromBaseUnits(owedQuote, env.quoteDecimals), { dp: 4 })} {env.quoteSymbol}
+          </p>
 
           <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-muted/30 p-3">
             <div>
@@ -162,14 +211,28 @@ export function PoolFeesCard({ token }: { token: TokenDetail }) {
           >
             {tx.isBusy ? 'Working…' : hasClaimable ? 'Claim pool fees' : 'No fees to claim'}
           </Button>
-
-          <TxStatus tx={tx} className="mt-3" />
         </>
       ) : (
-        <p className="mt-3 text-label text-muted-foreground">
-          Fees accrue to the token's creator, who is the only address that can collect them.
-        </p>
+        <>
+          <p className="mt-3 text-label text-muted-foreground">
+            Fees accrue to the token's creator. Anyone can sweep the protocol's share to the vault; the
+            creator's share of a sweep is held for them on the locker.
+          </p>
+          {hasOwed && (
+            <p className="num mt-2 text-label text-muted-foreground">
+              Held for the creator: {formatAmount(fromBaseUnits(owedToken, 18), { dp: 4 })} {token.symbol} ·{' '}
+              {formatAmount(fromBaseUnits(owedQuote, env.quoteDecimals), { dp: 4 })} {env.quoteSymbol}
+            </p>
+          )}
+          {isConnected && (
+            <Button variant="outline" className="mt-4 w-full" disabled={tx.isBusy || !locker} onClick={() => void sweep()}>
+              {tx.isBusy ? 'Working…' : 'Sweep protocol fees'}
+            </Button>
+          )}
+        </>
       )}
+
+      <TxStatus tx={tx} className="mt-3" />
     </Card>
   )
 }

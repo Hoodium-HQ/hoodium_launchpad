@@ -24,7 +24,7 @@ const USDG = 10n ** 6n
 const TOKEN = 10n ** 18n
 
 const CURVE_ALLOCATION = 800_000_000n * TOKEN
-const VIRTUAL_USDG = 12_000n * USDG
+const VIRTUAL_USDG = 23_000n * USDG // the factory derives this; 23,000 with the deploy defaults
 const TARGET = 69_000n * USDG
 
 function freshState(): CurveState {

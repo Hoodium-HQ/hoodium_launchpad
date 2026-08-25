@@ -94,6 +94,31 @@ EIP-191 envelope from `src/lib/auth.ts`, signed with the wallet (`useSaveLinks`)
 There are no cookies or sessions; requests are sent without credentials, which
 is also what the API's CORS reply allows.
 
+### Contract surface (post security fix pass, 2026-08-25)
+
+`src/lib/launchpad-abi.ts` holds human-readable fragments regenerated from
+`../contracts/abi/*.json`. What the app relies on:
+
+- `buy(usdgIn, minTokensOut, deadline)` / `sell(tokensIn, minUsdgOut, deadline)`
+  — the deadline is `now + 10 minutes`, one constant in `src/lib/deadline.ts`.
+  `Expired` and `CurveComplete` reverts are translated in `TxStatus`.
+- The buy that reaches the target graduates the curve in the same transaction
+  (creates and seeds the pool, so more gas); the trade panel warns when the
+  quoted buy would complete the curve. A pool primed with liquidity at a
+  hostile price makes that buy revert `PoolPriceManipulated` /
+  `UnexpectedSwapPayment` until the price is arbitraged back — shown as
+  "graduation is blocked until the pool price is arbitraged back; try again
+  later". Once `curveState.complete`, the Sell side is withdrawn and the panel
+  offers the permissionless `graduate()` only for the dev-buy-completion edge.
+- `PoolFeesCard`: `collectFees` for the creator; `sweepProtocolFees` for
+  anyone (protocol share to the vault, creator share held in
+  `creatorOwed0/1`, shown on the card).
+- `LeftoverCard`: for the creator of a graduated token, `dustOf(USDG|token,
+  creator)` on the graduation manager with a "Pull leftover" action.
+- Learn: `virtualUsdg` is derived by the factory (23,000 USDG with the deploy
+  defaults) and read from `GET /api/config` when the factory is live; the
+  anti-snipe cap is cumulative per address in the window.
+
 ### API gaps
 
 What the app would show if the API served it. None of these blocks a release.

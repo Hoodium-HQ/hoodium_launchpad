@@ -44,6 +44,17 @@ describe('Learn', () => {
     expect(screen.getByText('1,000,000,000')).toBeInTheDocument()
     expect(screen.getByText('800,000,000')).toBeInTheDocument()
     expect(screen.getAllByText('69,000 USDG').length).toBeGreaterThan(0)
+    // The derived virtual reserve with the deploy defaults, not a configured 12,000.
+    expect(screen.getAllByText('23,000 USDG').length).toBeGreaterThan(0)
+    expect(screen.queryByText('12,000 USDG')).toBeNull()
+  })
+
+  it('describes the mechanics the fix pass changed', () => {
+    renderLearn()
+    expect(screen.getByText(/cap is cumulative/)).toBeInTheDocument()
+    expect(screen.getByText(/closes the curve and creates the pool in the same transaction/)).toBeInTheDocument()
+    expect(screen.getByText(/ten-minute deadline/)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 3, name: 'Nothing is pushed' })).toBeInTheDocument()
   })
 
   it('illustrates every lifecycle step and section with a decorative sticker', () => {

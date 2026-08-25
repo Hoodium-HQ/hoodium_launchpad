@@ -44,8 +44,8 @@ const terms: LaunchTerms = {
   curveAllocation: (800_000_000n * TOKEN).toString(),
   lpAllocation: (200_000_000n * TOKEN).toString(),
   tokenDecimals: 18,
-  virtualUsdg: (12_000n * USDG).toString(),
-  virtualTokens: deriveVirtualTokens(800_000_000n * TOKEN, 12_000n * USDG, 69_000n * USDG).toString(),
+  virtualUsdg: (23_000n * USDG).toString(),
+  virtualTokens: deriveVirtualTokens(800_000_000n * TOKEN, 23_000n * USDG, 69_000n * USDG).toString(),
   creationFee: USDG.toString(),
   graduationTarget: (69_000n * USDG).toString(),
   graduationFee: '0',
@@ -142,7 +142,8 @@ class FakeChain {
 
 describeDb('launchpad api + indexer (mongo)', () => {
   const env = loadEnv({
-    MONGO_URI: MONGO_TEST_URI ?? '',
+    // A well-formed placeholder when skipping: `describe.skip` still collects this body, and an empty URI fails env validation before the skip applies.
+    MONGO_URI: MONGO_TEST_URI ?? 'mongodb://127.0.0.1:1/skipped',
     MONGO_DB_NAME: `lp_test_${Date.now()}`,
     RPC_URL: 'http://fake.invalid',
     LAUNCHPAD_FACTORY: FACTORY,

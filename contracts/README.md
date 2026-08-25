@@ -14,15 +14,17 @@ Target chain: **Robinhood Chain (chain id 4663, Arbitrum Orbit)**.
 |---|---|---|
 | 0 — Modelling | T0.1–T0.4 | **partly** — see Open items |
 | 1 — Contracts | T1.1–T1.12 | done |
-| 2 — Testing | T2.1–T2.3, T2.5–T2.9 | done — **68 tests, 7 fuzz properties, all passing** (2026-08-25, forge nightly, solc 0.8.28) |
-| 2 — Fork test | T2.4 | **not done** — needs a Robinhood Chain fork RPC |
+| 2 — Testing | T2.1–T2.3, T2.5–T2.9 | done — **146 tests, 10 fuzz properties, all passing** (2026-08-25, forge nightly, solc 0.8.28) |
+| 2 — Fork test | T2.4 | done — **8 tests** against the real Robinhood Chain Uniswap v3 (`ForkGraduation.t.sol`, needs `--fork-url`) |
+| 2 — Internal review | — | done — see `AUDIT.md`; every Critical/High/Medium finding fixed with a regression test |
 | 2 — Testnet soak | T2.10 | **not done** — 2 weeks of real launches |
 | 2 — **External audit** | T2.11 | **not done — blocks mainnet absolutely** |
 
-Plainly: the code builds and its suite passes, but **no external auditor has read
-it**. The original plan makes the audit a hard gate before real money. Whether to
-deploy to Robinhood Chain ahead of that is the owner's decision, not something
-this repository can make for them.
+Plainly: the code builds, its suite passes, and an internal four-lens review has
+been worked through, but **no external auditor has read it**. The original plan
+makes the audit a hard gate before real money. Whether to deploy to Robinhood
+Chain ahead of that is the owner's decision, not something this repository can
+make for them.
 
 ## Layout
 
@@ -46,13 +48,18 @@ its `.git`, and re-run the tests.
 HoodiumFactory       one-transaction deploy + optional dev buy      LP-1.1, LP-1.6
   ├─ HoodiumToken    ERC-20, fixed supply, no mint, no owner        LP-1.2
   └─ BondingCurve    xy=k over virtual reserves, USDG-denominated   LP-2.x, LP-3.x
-        │ target reached
+        │ the buy that reaches the target graduates in the same call
         ▼
-GraduationManager    atomic migration, permissionless               LP-4.1, LP-4.2, LP-4.6
-  ├─ Uniswap v3 pool created + seeded full-range
+GraduationManager    atomic migration; serves only the factory's curves   LP-4.1, LP-4.2, LP-4.6
+  ├─ Uniswap v3 pool created (or re-priced / verified) + seeded full-range
   └─ LPLocker        holds the position; no withdrawal path         LP-4.3
-FeeVault             m-of-n multisig                                LP-3.5
+FeeVault             m-of-n multisig, 30-day proposals              LP-3.5
 ```
+
+The three trust links point forward — the locker only accepts positions from the
+manager, the manager only serves curves of the factory, the factory verifies the
+manager was built for it — and each is an immutable checked in the constructor.
+The deploy script precomputes the addresses from the deployer's nonce.
 
 ## Building and testing
 
@@ -64,11 +71,16 @@ IMG=ghcr.io/foundry-rs/foundry:latest
 RUN="sudo docker run --rm -e FOUNDRY_DISABLE_NIGHTLY_WARNING=1 -v $PWD:/w -w /w $IMG"
 
 $RUN "forge build"
-$RUN "forge test"                          # 68 tests, fuzz at 4096 runs
+$RUN "forge test"                          # 146 tests, fuzz at 4096 runs (fork tests skipped)
+$RUN "forge test --match-contract ForkGraduation --fork-url https://rpc.mainnet.chain.robinhood.com -vv"
 $RUN "FOUNDRY_PROFILE=ci forge test"       # fuzz at 20000 runs
 $RUN "FOUNDRY_PROFILE=deep forge test"     # fuzz at 200000 runs — before audit
 $RUN "sh script/export-abi.sh"             # refresh abi/*.json after a source change
 ```
+
+`test/audit/` holds the internal review's proofs of concept, flipped into
+regression tests (`test_regression_*`) once each finding was fixed; the
+`test_audit_*` ones documented behaviour that was sound to begin with.
 
 With a local Foundry install, just run the quoted commands directly.
 
@@ -94,10 +106,17 @@ forever. Before step 1, settle:
 
 - **FeeVault signers and threshold** (`VAULT_OWNERS`, `VAULT_THRESHOLD`). The
   signer set is immutable; rotating a signer means a new vault and a new factory.
-  Threshold must be at least 2. Use hardware-wallet addresses.
-- **Curve parameters** (`VIRTUAL_USDG`, `GRADUATION_TARGET_USDG`, ...). The
-  defaults are design.md section 2 placeholders that T0.1 never validated (see
-  Open items 1). With the defaults, ~675 USDG buys the 5% dev-buy cap.
+  Threshold must be at least 2 and **should be below the signer count** — with
+  every signer required, one lost key locks the vault forever. The script
+  refuses that shape unless `ALLOW_FULL_THRESHOLD=true`. Proposals expire after
+  30 days and confirmations can be revoked while a proposal is open. Use
+  hardware-wallet addresses.
+- **Curve parameters** (`TOTAL_SUPPLY`, `CURVE_ALLOCATION`,
+  `GRADUATION_TARGET_USDG`, `GRADUATION_FEE_USDG`). The virtual reserves are
+  *derived* from these so the pool opens at exactly the price the curve closed
+  at (see Decisions); with the defaults `virtualUsdg` comes out at 23,000 USDG,
+  ~1,140 USDG buys the 5% dev-buy cap and ~220 USDG buys the 1% anti-snipe
+  allowance. `CURVE_ALLOCATION` must exceed half the supply.
 - **Fee splits**: `TRADE_FEE_BPS` (default 1%), `CREATOR_FEE_SHARE_BPS` (default
   70% of trade fees to the creator), `LP_PROTOCOL_FEE_SHARE_BPS` (default 30% of
   locked-LP pool fees to the protocol; the contract caps it at 50%).
@@ -115,19 +134,24 @@ Required variables:
 | Var | Value for Robinhood Chain |
 |---|---|
 | `PRIVATE_KEY` | deployer EOA (pays gas only; holds no role afterwards) |
-| `RPC_URL` | a Robinhood Chain RPC, e.g. `https://rpc.robinhoodchain.com` |
-| `EXPECTED_CHAIN_ID` | `4663` — the script refuses to broadcast if the RPC disagrees |
+| `RPC_URL` | a Robinhood Chain RPC: `https://rpc.mainnet.chain.robinhood.com` |
+| `EXPECTED_CHAIN_ID` | `4663` — required; the script refuses to broadcast if the RPC disagrees |
 | `USDG_ADDRESS` | `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168` (6 decimals) |
 | `UNISWAP_POSITION_MANAGER` | `0x73991a25c818bf1f1128deaab1492d45638de0d3` |
 | `VAULT_OWNERS` | comma-separated signer addresses, no spaces |
-| `VAULT_THRESHOLD` | `2` or more, at most the number of owners |
+| `VAULT_THRESHOLD` | `2` or more, below the number of owners (or `ALLOW_FULL_THRESHOLD=true`) |
 
 Everything else is optional with the defaults listed in `.env.example`. The
 Uniswap v3 factory is read from `positionManager.factory()` and USDG decimals from
 `USDG.decimals()` unless overridden.
 
 The deployer needs a little native ETH on Robinhood Chain: the Anvil rehearsal
-estimated ~8.9M gas for the four deployments.
+estimated ~9M gas for the four deployments. **Send nothing else from the
+deployer while the script runs**: the locker and manager are constructed with
+the *precomputed* addresses of the manager and factory (deployer nonce +2 and
++3), every constructor verifies the pairing, and the script asserts it again —
+an intervening transaction shifts the nonces and the run reverts before
+anything harmful happens, but it wastes the gas.
 
 ### 2. Dry run (no broadcast)
 
@@ -136,8 +160,9 @@ forge script script/Deploy.s.sol --rpc-url $RPC_URL
 ```
 
 Read the `=== parameters ===` block. Every number there is what will be burned
-into the contracts. USDG amounts are printed in 6-decimal units (12,000 USDG shows
-as `12000000000`).
+into the contracts. USDG amounts are printed in 6-decimal units (69,000 USDG shows
+as `69000000000`). The derived `virtualUsdg`/`virtualTokens` are printed after
+the deploy; 23,000 USDG is the expected value for the default allocations.
 
 ### 3. Broadcast and verify
 
@@ -252,27 +277,78 @@ step and asserts the curve is left byte-identical *and still tradeable*.
 outbound call, and Uniswap's `collect` can only move accrued fees. Principal
 cannot leave because nothing there is capable of asking for it.
 
-**Dev buys are exempt from the anti-snipe cap.** They execute inside the
-deployment transaction and are bounded separately by `devBuyMaxBps`, so they
-cannot front-run anything — no other buy can precede them.
+**Both virtual reserves are derived, and the pool opens at the closing price.**
+`vT = C·vU/target` sells the curve out exactly at the target;
+`lpAllocation = vT·(target−fee)/(vU+target)` makes the pool's opening price
+equal the curve's last marginal price. Solving both gives
+`vU = lpAllocation·target²/(C·(target−fee) − lpAllocation·target)`, which the
+factory computes and then re-checks to 0.5%. Before this the pool opened ~41%
+below the curve's last price and every late buyer was instantly underwater
+(AUDIT H3).
+
+**The completing buy graduates.** The buy that brings the reserve to the target
+calls the migration in the same transaction, and `sell` refuses once the target
+is reached. Otherwise a 1-wei sell ahead of every `graduate()` could hold a curve
+one wei short forever (AUDIT H2). `graduate()` stays external and permissionless
+for the one path that completes without a public buy — a dev buy at launch.
+
+**The anti-snipe window is per address, cumulative.** For the first
+`SNIPE_BLOCKS` blocks, `boughtInWindow[address]` may not exceed `SNIPE_MAX_BPS`
+of supply. A per-call cap was no cap: a contract could launch and loop `buy` a
+hundred times in the deploy transaction (AUDIT H1). Dev buys are exempt from the
+*cap* — they are bounded by `devBuyMaxBps` and nothing can precede them — but
+they count against the creator's window allowance.
+
+**A pre-made pool is re-priced or refused, never trusted.** Creating and
+initialising the Uniswap pool is permissionless, so by graduation it may exist at
+any price. If it has no liquidity in range the manager walks its price to the
+closing price with a zero-liquidity swap (nothing changes hands; the manager's
+swap callback refuses to pay). If it has liquidity, its price must already be
+within ~0.5% of the closing price or graduation reverts `PoolPriceManipulated`
+— a mispriced liquid pool is an arbitrage anyone can take to unblock it. The
+mint then requires 99% of both sides to go in. Before this a primed pool sent
+99.99% of the raise to the creator (AUDIT C1).
+
+**Only the factory's curves reach the manager, only the manager reaches the
+locker.** `migrate` requires `factory.curveOf(token) == msg.sender`; the locker
+requires `from == graduationManager`. Look-alike curves and forged positions
+cannot spoof `Migrated`/`PositionLocked` (AUDIT M1).
+
+**Graduation pushes nothing to third parties.** USDG on Robinhood Chain is a
+pausable, freezable proxy. The graduation fee accrues to `platformFeesAccrued`
+(swept by anyone via `claimPlatformFees`), and mint dust is credited on the
+manager for the creator to `pullDust`. A frozen recipient can therefore never
+make graduation revert (AUDIT M2).
+
+**The protocol's locked-LP share is sweepable by anyone.** `sweepProtocolFees`
+collects, pays the protocol share to the immutable vault, and credits the
+creator's share for the beneficiary to pull. A creator with no call path no
+longer strands the protocol's 30% with their own 70%; it is still only `collect`,
+so the principal proof above is untouched (AUDIT L2).
+
+**Trades carry a deadline; vault proposals expire.** `buy`/`sell` take a
+`deadline` timestamp (AUDIT L5). FeeVault proposals die after 30 days and a
+confirmation can be revoked while a proposal is open, so a stale confirmation
+from a compromised key is not a permanent half-quorum (AUDIT L3).
 
 ## Open items
 
-**1. T0.1 — curve parameters are unvalidated placeholders.**
-design.md section 2 marks them as such. With `virtualUsdg = 12,000` against a
-`69,000` target, a dev buy of only **~675 USDG already reaches the 5% cap**, and
-~130 USDG reaches 1%. The first few hundred USDG buy a very large share of supply.
-That may be intended, but it should be a decision rather than a side effect. The
-tests assert properties, not specific numbers, so re-parameterising will not
-invalidate them. The deploy script takes all of them from env for exactly this
-reason.
+**1. T0.1 — curve parameters are still a product decision.**
+The *shape* is now enforced (price continuity, sell-out at target) but the
+allocations and target themselves are design.md section 2 placeholders. With
+the derived `virtualUsdg = 23,000` against a `69,000` target, a dev buy of
+**~1,140 USDG reaches the 5% cap** and ~220 USDG reaches the 1% window
+allowance; the first 2,000 USDG buy ~8% of supply. That may be intended, but it
+should be a decision rather than a side effect. The tests assert properties, not
+specific numbers, so re-parameterising will not invalidate them.
 
-**2. T0.2 — USDG semantics on Robinhood Chain still unconfirmed.**
-Decimals (6, per the on-chain token), fee-on-transfer, blocklist. A blocklisted
-curve address would freeze reserves permanently, and no code here can defend
-against that. `FeeOnTransferTest` proves the fee-on-transfer case reverts rather
-than corrupts; the blocklist case has no contract-level mitigation and needs an
-answer from the USDG issuer.
+**2. T0.2 — USDG is pausable, freezable and upgradeable.**
+Verified on a fork: 6 decimals, no transfer fee, no contract allowlist — but the
+token is an ERC1967 proxy with `paused()`, address freezing and `upgradeTo`. The
+contracts now never push USDG to a third party inside graduation, so a frozen
+creator or vault cannot block it; a frozen *curve* address or a global pause
+would still freeze reserves, and no code here can defend against that. It needs
+an answer from the USDG issuer.
 
 **3. T0.3 — resolved as Uniswap v3.** design.md section 8: "v4 hooks would let
 Auto LP logic live in the pool itself — strategically interesting, materially more
@@ -287,12 +363,20 @@ collection, rounding favours them, and the web app states the split to every
 visitor — read from the contract, not hard-coded. T0.4 remains
 blocking-for-audit: the auditor still has to see it.
 
-**5. T2.4 — no fork test against real Uniswap.**
-The mocks cover the call *sequence* and its failure modes. They do not prove
-Uniswap behaves as assumed — in particular that the 1% / tick-spacing-200 fee
-tier is enabled on the Robinhood Chain v3 factory. Run
-`forge test --fork-url $RPC_URL` against a fork-based test before the first real
-launch, or at minimum graduate a throwaway token first.
+**5. T2.4 — fork test done; re-run it before deploying.**
+`ForkGraduation.t.sol` launches through the factory and graduates against the
+real Robinhood Chain v3 factory / position manager (1% tier, tick spacing 200,
+both token orderings), and reproduces the pre-initialised-pool attack to assert
+it no longer works there. It needs `--fork-url`; re-run it against the block you
+deploy at, and still graduate a throwaway token first.
+
+**5b. Residual: graduation can be delayed, not broken.**
+A pool primed *with liquidity* at a hostile price (or an out-of-range position
+in the path between the primed price and the fair one) makes the completing buy
+revert until the price is back inside the band. Any such liquidity is a
+mispriced order against a known fair price — an arbitrage — so it clears as
+soon as anyone takes it; the attacker pays for the delay. Documented in
+`GraduationManager` and covered by `test_regression_prePrimedLiquidPool_blocksOnlyUntilArbitraged`.
 
 **6. T2.11 — no audit. This blocks mainnet absolutely per the original plan.**
 tasks.md: *"Book the audit slot before Phase 1 finishes, not after."* Phase 1 is

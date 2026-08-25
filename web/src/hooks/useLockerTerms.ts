@@ -5,6 +5,8 @@ import { factoryAbi, graduationManagerAbi, lpLockerAbi } from '@/lib/launchpad-a
 export interface LockerTerms {
   /** The lock contract holding graduated positions, or undefined until resolved. */
   address: `0x${string}` | undefined
+  /** The graduation manager (holds creators' migration dust), or undefined until resolved. */
+  manager: `0x${string}` | undefined
   /** Creator's share of pool fees, as a percentage. Null until read. */
   creatorPct: number | null
   /** Protocol's share of pool fees, as a percentage. Null until read. */
@@ -27,8 +29,10 @@ export interface LockerTerms {
 export function useLockerTerms(): LockerTerms {
   const factory = env.launchpadFactory as `0x${string}`
   const configured = env.locker as `0x${string}` | ''
-  const enabled = Boolean(factory) && !configured
+  const enabled = Boolean(factory)
 
+  // The manager is read even when the locker is configured: it is where a
+  // creator's migration dust waits, and there is no shortcut env for it.
   const { data: manager } = useReadContract({
     address: factory,
     abi: factoryAbi,
@@ -40,7 +44,7 @@ export function useLockerTerms(): LockerTerms {
     address: manager,
     abi: graduationManagerAbi,
     functionName: 'locker',
-    query: { enabled: enabled && Boolean(manager), staleTime: Infinity },
+    query: { enabled: enabled && !configured && Boolean(manager), staleTime: Infinity },
   })
 
   const locker = configured || discovered
@@ -53,11 +57,12 @@ export function useLockerTerms(): LockerTerms {
   })
 
   if (shareBps === undefined) {
-    return { address: locker || undefined, creatorPct: null, protocolPct: null }
+    return { address: locker || undefined, manager, creatorPct: null, protocolPct: null }
   }
 
   return {
     address: locker || undefined,
+    manager,
     creatorPct: (10_000 - Number(shareBps)) / 100,
     protocolPct: Number(shareBps) / 100,
   }

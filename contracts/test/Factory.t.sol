@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {BaseTest} from "./Base.t.sol";
 import {BondingCurve} from "../src/BondingCurve.sol";
+import {GraduationManager} from "../src/GraduationManager.sol";
 import {HoodiumFactory} from "../src/HoodiumFactory.sol";
 import {HoodiumToken} from "../src/HoodiumToken.sol";
 
@@ -81,14 +82,10 @@ contract FactoryTest is BaseTest {
     // ── LP-1.6 — dev buy ─────────────────────────────────────────────────────
 
     /*
-     * Sizing note, and a finding worth carrying into T0.1 (curve parameter
-     * modelling): at the opening price these placeholders produce, a dev buy of
-     * only ~675 USDG already reaches the 5% cap, and ~130 USDG reaches 1%.
-     *
-     * That is a direct consequence of `virtualUsdg = 12,000` against a 69,000
-     * target — the first few hundred USDG buy a very large share. Whether that is
-     * the intended shape is exactly what T0.1 has to answer against real data;
-     * these tests only assert the cap holds, not that the number is right.
+     * Sizing note: at the opening price the derived reserves produce
+     * (virtualUsdg = 23,000 against a 69,000 target), a dev buy of ~1,140 USDG
+     * reaches the 5% cap and ~220 USDG reaches 1%. These tests only assert the
+     * cap holds, not that the number is right.
      */
     uint256 constant DEV_BUY_UNDER_CAP = 500 * USDG_UNIT;
 
@@ -133,7 +130,8 @@ contract FactoryTest is BaseTest {
         assertLe(HoodiumToken(t).balanceOf(creator), factory.devBuyCapTokens());
     }
 
-    /// The dev buy is exempt from the anti-snipe cap by design (design.md section 4).
+    /// The dev buy is exempt from the anti-snipe *cap* by design (design.md
+    /// section 4) but counts against the creator's window allowance (AUDIT H1).
     function test_devBuy_isNotBlockedByAntiSnipe() public {
         uint256 amount = DEV_BUY_UNDER_CAP;
         _fund(creator, amount + CREATION_FEE);
@@ -145,6 +143,56 @@ contract FactoryTest is BaseTest {
 
         uint256 snipeCap = TOTAL_SUPPLY * SNIPE_MAX_BPS / 10_000;
         assertGt(HoodiumToken(t).balanceOf(creator), snipeCap, "fixture should exceed the snipe cap");
+    }
+
+    /// AUDIT H1 — after a dev buy above the window cap, the creator cannot buy
+    /// again inside the window from the same address.
+    function test_devBuy_consumesTheCreatorsWindowAllowance() public {
+        uint256 amount = DEV_BUY_UNDER_CAP;
+        _fund(creator, amount + CREATION_FEE);
+        vm.startPrank(creator);
+        usdg.approve(address(factory), amount + CREATION_FEE);
+        (address t, address c) = factory.launch("Snipe", "SNP", "ipfs://s", amount, 0);
+        vm.stopPrank();
+
+        BondingCurve curve = BondingCurve(c);
+        uint256 held = HoodiumToken(t).balanceOf(creator);
+        assertEq(curve.boughtInWindow(creator), held, "dev buy not counted in the window");
+
+        uint256 cap = TOTAL_SUPPLY * SNIPE_MAX_BPS / 10_000;
+        (uint256 next,,,) = curve.quoteBuy(10 * USDG_UNIT);
+        _fund(creator, 10 * USDG_UNIT);
+        vm.startPrank(creator);
+        usdg.approve(c, 10 * USDG_UNIT);
+        vm.expectRevert(abi.encodeWithSelector(BondingCurve.AntiSnipeCapExceeded.selector, held + next, cap));
+        curve.buy(10 * USDG_UNIT, 0, block.timestamp);
+        vm.stopPrank();
+    }
+
+    /// AUDIT L1 — a dev buy the curve cannot fully absorb is refunded, not stranded.
+    function test_devBuy_overshootIsRefundedToTheCreator() public {
+        // Not reachable with the shipped 5% cap (continuity needs the curve to
+        // hold over half the supply, so 5% can never sell it out), but any
+        // deployment may raise the cap; the refund path must hold when it does.
+        Terms memory t = _defaultTerms();
+        t.devBuyMaxBps = 10_000;
+        t.graduationTarget = 1_000 * USDG_UNIT;
+        t.creationFee = 0;
+        _deployStack(address(usdg), t);
+
+        uint256 devBuy = 5_000 * USDG_UNIT;
+        _fund(creator, devBuy);
+        vm.startPrank(creator);
+        usdg.approve(address(factory), devBuy);
+        (, address c) = factory.launch("Small", "SML", "ipfs://x", devBuy, 0);
+        vm.stopPrank();
+
+        BondingCurve small = BondingCurve(c);
+        assertTrue(small.curveComplete(), "fixture: dev buy should complete the curve");
+        assertEq(usdg.balanceOf(address(factory)), 0, "factory kept USDG");
+        uint256 spent = devBuy - usdg.balanceOf(creator);
+        assertLt(spent, devBuy, "nothing was refunded");
+        assertEq(usdg.balanceOf(address(small)), spent, "curve holds exactly what was spent");
     }
 
     function test_devBuy_cannotBeCalledTwice() public {
@@ -172,25 +220,10 @@ contract FactoryTest is BaseTest {
     // ── LP-1.5 — creation fee ────────────────────────────────────────────────
 
     function test_creationFee_goesToTheVault() public {
-        HoodiumFactory paid = new HoodiumFactory(
-            HoodiumFactory.FactoryConfig({
-                usdg: address(usdg),
-                feeVault: address(vault),
-                graduationManager: graduationManagerStub,
-                tokenDecimals: 18,
-                totalSupply: TOTAL_SUPPLY,
-                curveAllocation: CURVE_ALLOCATION,
-                virtualUsdg: VIRTUAL_USDG,
-                graduationTarget: GRADUATION_TARGET,
-                graduationFee: GRADUATION_FEE,
-                tradeFeeBps: TRADE_FEE_BPS,
-                creatorFeeShareBps: CREATOR_SHARE_BPS,
-                creationFee: 25 * USDG_UNIT,
-                devBuyMaxBps: DEV_BUY_MAX_BPS,
-                snipeBlocks: SNIPE_BLOCKS,
-                snipeMaxBps: SNIPE_MAX_BPS
-            })
-        );
+        Terms memory t = _defaultTerms();
+        t.creationFee = 25 * USDG_UNIT;
+        _deployStack(address(usdg), t);
+        HoodiumFactory paid = factory;
 
         _fund(creator, 25 * USDG_UNIT);
         uint256 vaultBefore = usdg.balanceOf(address(vault));
@@ -229,7 +262,80 @@ contract FactoryTest is BaseTest {
      * disagree with it.
      */
     function test_virtualTokensDerivedFromTarget() public view {
-        assertEq(factory.virtualTokens(), CURVE_ALLOCATION * VIRTUAL_USDG / GRADUATION_TARGET);
+        assertEq(factory.virtualTokens(), CURVE_ALLOCATION * factory.virtualUsdg() / GRADUATION_TARGET);
+    }
+
+    /**
+     * AUDIT H3 — the virtual USDG reserve is derived so the pool opens at the
+     * curve's closing price: vU = lpAllocation · target / (C − lpAllocation).
+     */
+    function test_virtualUsdgDerivedForPriceContinuity() public view {
+        assertEq(factory.virtualUsdg(), VIRTUAL_USDG);
+        assertEq(factory.virtualUsdg(), LP_ALLOCATION * GRADUATION_TARGET / (CURVE_ALLOCATION - LP_ALLOCATION));
+        // Continuity: closing price (vU + target) / vT equals pool price target / lpAllocation.
+        uint256 closingE18 = (VIRTUAL_USDG + GRADUATION_TARGET) * 1e18 / factory.virtualTokens();
+        uint256 poolE18 = GRADUATION_TARGET * 1e18 / LP_ALLOCATION;
+        assertApproxEqRel(closingE18, poolE18, 1e15, "pool would not open at the closing price");
+    }
+
+    /// A graduation fee is part of the derivation: the pool still opens at the closing price.
+    function test_virtualUsdgAccountsForTheGraduationFee() public {
+        Terms memory t = _defaultTerms();
+        t.graduationFee = 1_000 * USDG_UNIT;
+        _deployStack(address(usdg), t);
+        uint256 closingE18 = (factory.virtualUsdg() + GRADUATION_TARGET) * 1e18 / factory.virtualTokens();
+        uint256 poolE18 = (GRADUATION_TARGET - t.graduationFee) * 1e18 / LP_ALLOCATION;
+        assertApproxEqRel(closingE18, poolE18, 1e15);
+    }
+
+    /// An LP allocation of half the supply or more has no positive vU.
+    function test_factory_rejectsAllocationsWithoutContinuity() public {
+        Terms memory t = _defaultTerms();
+        t.curveAllocation = 500_000_000 * TOKEN_UNIT;
+        vm.expectRevert(bytes("lp allocation too large for continuity"));
+        new HoodiumFactory(
+            HoodiumFactory.FactoryConfig({
+                usdg: address(usdg),
+                feeVault: address(vault),
+                graduationManager: address(manager),
+                tokenDecimals: 18,
+                totalSupply: t.totalSupply,
+                curveAllocation: t.curveAllocation,
+                graduationTarget: t.graduationTarget,
+                graduationFee: t.graduationFee,
+                tradeFeeBps: t.tradeFeeBps,
+                creatorFeeShareBps: t.creatorFeeShareBps,
+                creationFee: t.creationFee,
+                devBuyMaxBps: t.devBuyMaxBps,
+                snipeBlocks: t.snipeBlocks,
+                snipeMaxBps: t.snipeMaxBps
+            })
+        );
+    }
+
+    /// AUDIT M1 — the factory refuses a manager that was not built for it.
+    function test_factory_rejectsAManagerPairedWithAnotherFactory() public {
+        GraduationManager other = manager; // paired with `factory`, not with the new one
+        Terms memory t = _defaultTerms();
+        vm.expectRevert(bytes("manager/factory mismatch"));
+        new HoodiumFactory(
+            HoodiumFactory.FactoryConfig({
+                usdg: address(usdg),
+                feeVault: address(vault),
+                graduationManager: address(other),
+                tokenDecimals: 18,
+                totalSupply: t.totalSupply,
+                curveAllocation: t.curveAllocation,
+                graduationTarget: t.graduationTarget,
+                graduationFee: t.graduationFee,
+                tradeFeeBps: t.tradeFeeBps,
+                creatorFeeShareBps: t.creatorFeeShareBps,
+                creationFee: t.creationFee,
+                devBuyMaxBps: t.devBuyMaxBps,
+                snipeBlocks: t.snipeBlocks,
+                snipeMaxBps: t.snipeMaxBps
+            })
+        );
     }
 
     function test_curveSellsOutCloseToAllocationAtTarget() public {
@@ -237,7 +343,7 @@ contract FactoryTest is BaseTest {
         _skipSnipeWindow();
         _buy(curve, alice, 200_000 * USDG_UNIT);
 
-        assertTrue(curve.curveComplete());
+        assertTrue(curve.graduated());
         // Rounding favours the contract, so a few tokens may remain — they roll
         // into the pool at graduation rather than being lost.
         uint256 sold = curve.tokensSold();

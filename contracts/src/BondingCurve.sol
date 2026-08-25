@@ -29,6 +29,23 @@ import {IGraduationManager} from "./interfaces/IGraduationManager.sol";
  * that rounds toward the caller can be bled by repeated dust trades until the
  * reserve no longer backs the supply.
  *
+ * ── Completion is final (AUDIT H2) ───────────────────────────────────────────
+ * The buy that brings `reserveUsdg` to the target graduates the curve in the
+ * same transaction, and `sell` refuses once the target is reached. Without both,
+ * anyone holding a wei of tokens could sell it ahead of every `graduate()` and
+ * keep the curve one wei short forever. The external `graduate()` remains for
+ * the one way a curve can complete without a public buy — a dev buy at launch —
+ * and is permissionless (LP-4.6).
+ *
+ * ── The anti-snipe window counts per address (AUDIT H1) ──────────────────────
+ * For the first `snipeBlocks` blocks, cumulative tokens bought per address are
+ * capped at `snipeMaxTokens`. A per-call cap is no cap at all: a contract can
+ * launch and loop `buy` a hundred times in the deployment transaction. The dev
+ * buy is bounded separately (`devBuyMaxBps`) but still counts against the
+ * creator's window allowance, so "dev buy then keep buying" is closed too.
+ * Splitting across addresses is still possible; each needs its own USDG and
+ * gets its own 1%, which is the window's intent.
+ *
  * ── USDG assumption (T0.2, unresolved) ───────────────────────────────────────
  * This contract assumes USDG is a standard ERC-20: no fee-on-transfer, no
  * rebasing. T0.2 is still open, so rather than assume silently, every inbound
@@ -81,6 +98,13 @@ contract BondingCurve is ReentrancyGuard {
     bool public graduated;
     bool private _devBuyDone;
 
+    /// Tokens bought per address inside the anti-snipe window (AUDIT H1).
+    mapping(address => uint256) public boughtInWindow;
+
+    /// Where the liquidity went. Zero until graduation.
+    address public pool;
+    uint256 public lpTokenId;
+
     /// Fee balances, held separately from reserves so neither can spend the other.
     uint256 public creatorFeesAccrued;
     uint256 public platformFeesAccrued;
@@ -124,6 +148,8 @@ contract BondingCurve is ReentrancyGuard {
     error DevBuyAlreadyDone();
     error ExceedsSold();
     error NotCreator();
+    error CurveComplete();
+    error Expired(uint256 deadline);
 
     struct CurveConfig {
         address usdg;
@@ -252,19 +278,36 @@ contract BondingCurve is ReentrancyGuard {
      * @param usdgIn Gross USDG offered. Only what the curve can absorb is taken;
      *        the rest is left with the caller (LP-2.6).
      * @param minTokensOut Caller's floor — reverts if the result is worse (LP-2.4).
+     * @param deadline Last block timestamp at which the trade is acceptable
+     *        (AUDIT L5) — a quote is only as good as the moment it was made.
+     *
+     * If this buy is the one that reaches the target, the curve graduates before
+     * the call returns (AUDIT H2): the pool exists and the position is locked by
+     * the time the buyer sees their tokens.
      */
-    function buy(uint256 usdgIn, uint256 minTokensOut) external nonReentrant returns (uint256 tokensOut) {
-        tokensOut = _buy(msg.sender, msg.sender, usdgIn, minTokensOut, true);
+    function buy(uint256 usdgIn, uint256 minTokensOut, uint256 deadline)
+        external
+        nonReentrant
+        returns (uint256 tokensOut)
+    {
+        _checkDeadline(deadline);
+        tokensOut = _buy(msg.sender, msg.sender, usdgIn, minTokensOut, true, true);
     }
 
     /**
      * @notice The creator's own purchase, executed inside the deployment
      *         transaction (LP-1.6, design.md section 4).
      *
-     * Exempt from the anti-snipe cap because it is bounded separately by the
+     * Exempt from the anti-snipe *cap* because it is bounded separately by the
      * factory's `devBuyMaxBps`, and because it cannot front-run anything — no
      * other buy can precede it, since the curve does not exist until this
-     * transaction completes.
+     * transaction completes. It still *counts* toward the creator's window
+     * allowance (AUDIT H1), so the creator cannot follow it with more buys in
+     * the window.
+     *
+     * Does not graduate on completion: it runs inside `HoodiumFactory.launch`,
+     * before the factory has finished recording the launch. A curve a dev buy
+     * completes outright is graduated by anyone via `graduate()`.
      */
     function devBuy(address recipient, uint256 usdgIn, uint256 minTokensOut)
         external
@@ -274,13 +317,17 @@ contract BondingCurve is ReentrancyGuard {
         if (msg.sender != factory) revert NotFactory();
         if (_devBuyDone) revert DevBuyAlreadyDone();
         _devBuyDone = true;
-        tokensOut = _buy(msg.sender, recipient, usdgIn, minTokensOut, false);
+        tokensOut = _buy(msg.sender, recipient, usdgIn, minTokensOut, false, false);
     }
 
-    function _buy(address payer, address recipient, uint256 usdgIn, uint256 minTokensOut, bool enforceSnipeCap)
-        private
-        returns (uint256 tokensOut)
-    {
+    function _buy(
+        address payer,
+        address recipient,
+        uint256 usdgIn,
+        uint256 minTokensOut,
+        bool enforceSnipeCap,
+        bool graduateOnCompletion
+    ) private returns (uint256 tokensOut) {
         if (graduated) revert AlreadyGraduated();
         if (usdgIn == 0) revert ZeroAmount();
 
@@ -295,9 +342,13 @@ contract BondingCurve is ReentrancyGuard {
         if (tokensOut < minTokensOut) revert SlippageExceeded(tokensOut, minTokensOut);
         if (tokensOut == 0) revert ZeroAmount();
 
-        // LP-2.5 — cap per-transaction size for the opening blocks.
-        if (enforceSnipeCap && block.number < deployBlock + snipeBlocks && tokensOut > snipeMaxTokens) {
-            revert AntiSnipeCapExceeded(tokensOut, snipeMaxTokens);
+        // LP-2.5 / AUDIT H1 — cap cumulative size per address for the opening
+        // blocks. Recorded for every buy in the window (the dev buy included) and
+        // enforced for every buy but the dev buy.
+        if (block.number < deployBlock + snipeBlocks) {
+            uint256 total = boughtInWindow[recipient] + tokensOut;
+            boughtInWindow[recipient] = total;
+            if (enforceSnipeCap && total > snipeMaxTokens) revert AntiSnipeCapExceeded(total, snipeMaxTokens);
         }
 
         // Effects before interactions (LP-N2).
@@ -310,14 +361,29 @@ contract BondingCurve is ReentrancyGuard {
         token.safeTransfer(recipient, tokensOut);
 
         emit Bought(recipient, taken, tokensOut, fee, refund, reserveUsdg, tokensSold);
+
+        // AUDIT H2 — the completing buy graduates. Still inside the caller's
+        // nonReentrant frame, so nothing can trade between completion and the
+        // pool existing.
+        if (graduateOnCompletion && reserveUsdg >= graduationTarget) _graduate();
     }
 
     /**
      * @notice Sell tokens back to the curve (LP-2.2).
      * @param minUsdgOut Caller's floor — reverts if the result is worse (LP-2.4).
+     * @param deadline Last block timestamp at which the trade is acceptable (AUDIT L5).
+     *
+     * Refuses once the target is reached (AUDIT H2): a completed curve is on its
+     * way to the pool, and a sell at that point could only serve to hold it back.
      */
-    function sell(uint256 tokensIn, uint256 minUsdgOut) external nonReentrant returns (uint256 usdgOut) {
+    function sell(uint256 tokensIn, uint256 minUsdgOut, uint256 deadline)
+        external
+        nonReentrant
+        returns (uint256 usdgOut)
+    {
+        _checkDeadline(deadline);
         if (graduated) revert AlreadyGraduated();
+        if (curveComplete()) revert CurveComplete();
         if (tokensIn == 0) revert ZeroAmount();
         if (tokensIn > tokensSold) revert ExceedsSold();
 
@@ -392,11 +458,31 @@ contract BondingCurve is ReentrancyGuard {
      * Permissionless (LP-4.6): anyone may call it, and Hoodium is not a
      * dependency. If Hoodium disappears entirely, tokens still graduate.
      *
+     * Normally unnecessary — the buy that reaches the target graduates on its
+     * own (AUDIT H2). This entry point covers the one case that does not: a dev
+     * buy at launch that completes the curve outright.
+     *
      * Atomic (LP-4.2): if any step reverts the whole transaction reverts and the
      * curve stays tradeable, because `graduated` is only durable if the call
      * succeeds.
      */
-    function graduate() external nonReentrant returns (address pool, uint256 tokenId) {
+    function graduate() external nonReentrant returns (address pool_, uint256 tokenId) {
+        return _graduate();
+    }
+
+    /**
+     * @dev Shared by `graduate()` and the completing buy. Both callers hold the
+     *      reentrancy lock, so the manager cannot re-enter `buy`/`sell`/`graduate`
+     *      while this runs — and `graduated` is set before the first external
+     *      call anyway (LP-4.4).
+     *
+     *      Nothing is *pushed* to a third party here (AUDIT M2): the graduation
+     *      fee accrues to `platformFeesAccrued` and leaves via
+     *      `claimPlatformFees`; any dust the mint leaves is credited on the
+     *      manager for the creator to pull. A frozen or paused recipient can
+     *      therefore never make graduation revert.
+     */
+    function _graduate() private returns (address pool_, uint256 tokenId) {
         if (graduated) revert AlreadyGraduated();
         if (!curveComplete()) revert TargetNotReached();
 
@@ -408,21 +494,34 @@ contract BondingCurve is ReentrancyGuard {
         uint256 tokensForLp = lpAllocation + (curveAllocation - tokensSold);
         reserveUsdg = 0;
 
-        usdg.safeTransfer(feeVault, graduationFee);
+        // LP-3.3 — the graduation fee is the platform's. It stays in this
+        // contract's balance as an accrued fee rather than being transferred.
+        if (graduationFee > 0) {
+            platformFeesAccrued += graduationFee;
+            emit FeesAccrued(0, graduationFee);
+        }
 
         usdg.forceApprove(address(graduationManager), usdgForLp);
         token.forceApprove(address(graduationManager), tokensForLp);
 
-        (pool, tokenId) = graduationManager.migrate(address(token), tokensForLp, usdgForLp, creator);
+        (pool_, tokenId) = graduationManager.migrate(address(token), tokensForLp, usdgForLp, creator);
 
         // Leave no standing allowance behind.
         usdg.forceApprove(address(graduationManager), 0);
         token.forceApprove(address(graduationManager), 0);
 
-        emit Graduated(address(token), pool, tokenId, usdgForLp, tokensForLp);
+        pool = pool_;
+        lpTokenId = tokenId;
+
+        emit Graduated(address(token), pool_, tokenId, usdgForLp, tokensForLp);
     }
 
     // ── Internals ────────────────────────────────────────────────────────────
+
+    /// @dev AUDIT L5 — a signed trade must not be executable indefinitely.
+    function _checkDeadline(uint256 deadline) private view {
+        if (block.timestamp > deadline) revert Expired(deadline);
+    }
 
     /**
      * @dev Split gross input into (net, fee, refund), clamping to what the curve

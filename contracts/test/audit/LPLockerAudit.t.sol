@@ -1,97 +1,39 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {BaseTest} from "../Base.t.sol";
 import {BondingCurve} from "../../src/BondingCurve.sol";
 import {GraduationManager} from "../../src/GraduationManager.sol";
-import {HoodiumFactory} from "../../src/HoodiumFactory.sol";
 import {HoodiumToken} from "../../src/HoodiumToken.sol";
 import {LPLocker} from "../../src/LPLocker.sol";
-import {FeeVault} from "../../src/FeeVault.sol";
-import {MockUSDG, FeeOnTransferUSDG} from "../mocks/MockUSDG.sol";
-import {MockPositionManager, MockUniswapFactory} from "../mocks/MockUniswap.sol";
+import {MockUSDG} from "../mocks/MockUSDG.sol";
+import {MockUniswapPool} from "../mocks/MockUniswap.sol";
 import {INonfungiblePositionManager} from "../../src/interfaces/IUniswapV3.sol";
 
 /// A beneficiary with no way to call anything: a contract that only receives.
 contract DumbContract {}
 
 /**
- * AUDIT PoCs — LPLocker.
+ * AUDIT — LPLocker. The "no withdrawal path" claims were sound and stay; the
+ * two LOW findings (a stranded beneficiary strands the protocol's share too;
+ * anyone could lock anything under any label) are regressions now.
  */
-contract LPLockerAuditTest is Test {
-    uint256 constant USDG_UNIT = 1e6;
-    uint256 constant TOKEN_UNIT = 1e18;
-
-    MockUSDG usdg;
-    FeeVault vault;
-    MockUniswapFactory uniFactory;
-    MockPositionManager pm;
-    LPLocker locker;
-    GraduationManager manager;
-    HoodiumFactory factory;
+contract LPLockerAuditTest is BaseTest {
     HoodiumToken token;
     BondingCurve curve;
 
-    address creator = makeAddr("creator");
-    address alice = makeAddr("alice");
-    address attacker = makeAddr("attacker");
-
-    function setUp() public {
-        usdg = new MockUSDG();
-        address[] memory owners = new address[](2);
-        owners[0] = makeAddr("s1");
-        owners[1] = makeAddr("s2");
-        vault = new FeeVault(owners, 2);
-
-        uniFactory = new MockUniswapFactory();
-        pm = new MockPositionManager();
-        locker = new LPLocker(address(pm), address(vault), 3_000);
-        manager = new GraduationManager(address(uniFactory), address(pm), address(locker), address(usdg), 10_000, 200);
-
-        factory = new HoodiumFactory(
-            HoodiumFactory.FactoryConfig({
-                usdg: address(usdg),
-                feeVault: address(vault),
-                graduationManager: address(manager),
-                tokenDecimals: 18,
-                totalSupply: 1_000_000_000 * TOKEN_UNIT,
-                curveAllocation: 800_000_000 * TOKEN_UNIT,
-                virtualUsdg: 12_000 * USDG_UNIT,
-                graduationTarget: 69_000 * USDG_UNIT,
-                graduationFee: 0,
-                tradeFeeBps: 100,
-                creatorFeeShareBps: 7_000,
-                creationFee: 0,
-                devBuyMaxBps: 500,
-                snipeBlocks: 3,
-                snipeMaxBps: 100
-            })
-        );
-
-        vm.prank(creator);
-        (address t, address c) = factory.launch("Grad", "GRAD", "ipfs://x", 0, 0);
-        token = HoodiumToken(t);
-        curve = BondingCurve(c);
-        vm.roll(block.number + 4);
-    }
-
-    function _fillCurve() internal {
-        uint256 amount = 200_000 * USDG_UNIT;
-        usdg.mint(alice, amount);
-        vm.startPrank(alice);
-        usdg.approve(address(curve), amount);
-        curve.buy(amount, 0);
-        vm.stopPrank();
+    function setUp() public override {
+        super.setUp();
+        Terms memory t = _defaultTerms();
+        t.creationFee = 0;
+        _deployStack(address(usdg), t);
+        (token, curve) = _launch();
+        _skipSnipeWindow();
     }
 
     function _usdgIsToken1() internal view returns (bool) {
         return address(token) < address(usdg);
-    }
-
-    function _creditUsdg(uint256 tokenId, uint256 amount) internal {
-        usdg.mint(address(pm), amount);
-        pm.creditFees(tokenId, _usdgIsToken1() ? 0 : amount, _usdgIsToken1() ? amount : 0);
     }
 
     // ── No withdrawal surface ────────────────────────────────────────────────
@@ -126,12 +68,13 @@ contract LPLockerAuditTest is Test {
     /// The locker never grants an operator approval on the position manager,
     /// so nobody — not even the beneficiary — is authorised for the token.
     function test_locker_neverGrantsOperatorApproval() public {
-        _fillCurve();
-        (, uint256 tokenId) = curve.graduate();
+        (, uint256 tokenId) = _fillCurve(curve, alice);
 
-        _creditUsdg(tokenId, 100 * USDG_UNIT);
+        _creditUsdgFees(address(token), tokenId, 100 * USDG_UNIT);
         vm.prank(creator);
         locker.collectFees(tokenId);
+        vm.prank(randomCaller);
+        locker.sweepProtocolFees(tokenId);
 
         assertEq(pm.getApproved(tokenId), address(0), "token-level approval granted");
         assertFalse(pm.isApprovedForAll(address(locker), creator), "creator is operator");
@@ -144,9 +87,8 @@ contract LPLockerAuditTest is Test {
 
     /// creator + protocol == collected, protocol == floor(collected * bps / 1e4).
     function testFuzz_split_conservesAndRoundsAgainstProtocol(uint128 fees) public {
-        _fillCurve();
-        (, uint256 tokenId) = curve.graduate();
-        _creditUsdg(tokenId, fees);
+        (, uint256 tokenId) = _fillCurve(curve, alice);
+        _creditUsdgFees(address(token), tokenId, fees);
 
         uint256 c0 = usdg.balanceOf(creator);
         uint256 v0 = usdg.balanceOf(address(vault));
@@ -156,49 +98,68 @@ contract LPLockerAuditTest is Test {
         uint256 toCreator = usdg.balanceOf(creator) - c0;
         uint256 toVault = usdg.balanceOf(address(vault)) - v0;
         assertEq(toCreator + toVault, fees, "split does not conserve");
-        assertEq(toVault, uint256(fees) * 3_000 / 10_000, "protocol did not round down");
+        assertEq(toVault, uint256(fees) * PROTOCOL_FEE_SHARE_BPS / 10_000, "protocol did not round down");
+        assertEq(usdg.balanceOf(address(locker)), 0, "locker retained");
+    }
+
+    /// The same conservation holds when the two entry points are interleaved.
+    function testFuzz_split_conservesAcrossSweepAndCollect(uint128 feesA, uint128 feesB) public {
+        (, uint256 tokenId) = _fillCurve(curve, alice);
+        uint256 c0 = usdg.balanceOf(creator);
+        uint256 v0 = usdg.balanceOf(address(vault));
+
+        _creditUsdgFees(address(token), tokenId, feesA);
+        vm.prank(randomCaller);
+        locker.sweepProtocolFees(tokenId);
+        _creditUsdgFees(address(token), tokenId, feesB);
+        vm.prank(creator);
+        locker.collectFees(tokenId);
+
+        uint256 total = uint256(feesA) + uint256(feesB);
+        uint256 toCreator = usdg.balanceOf(creator) - c0;
+        uint256 toVault = usdg.balanceOf(address(vault)) - v0;
+        assertEq(toCreator + toVault, total, "split does not conserve");
+        assertEq(
+            toVault,
+            uint256(feesA) * PROTOCOL_FEE_SHARE_BPS / 10_000 + uint256(feesB) * PROTOCOL_FEE_SHARE_BPS / 10_000
+        );
         assertEq(usdg.balanceOf(address(locker)), 0, "locker retained");
     }
 
     /// Zero accrued fees: no transfers, no revert.
     function test_collectFees_withNothingOwed_doesNotRevert() public {
-        _fillCurve();
-        (, uint256 tokenId) = curve.graduate();
+        (, uint256 tokenId) = _fillCurve(curve, alice);
         vm.prank(creator);
         (uint256 a, uint256 b) = locker.collectFees(tokenId);
         assertEq(a + b, 0);
+        vm.prank(randomCaller);
+        locker.sweepProtocolFees(tokenId);
     }
 
-    // ── Beneficiary is fixed forever ─────────────────────────────────────────
+    // ── Beneficiary is fixed forever, but the protocol share is not hostage ──
 
     /**
-     * LOW. The beneficiary is the curve's `creator` (msg.sender of launch) and
-     * can never change. A creator that is a contract with no ability to call
-     * `collectFees` — or an EOA whose key is lost — strands 100% of that pool's
-     * fees forever, including the protocol's 30%. There is no fallback path.
+     * Was LOW: a creator with no call path stranded 100% of the pool's fees,
+     * including the protocol's 30%. Now anyone can sweep the protocol's share
+     * to the vault; the creator's share is credited and waits for them. What
+     * stays stranded is only what was always theirs to lose.
      */
-    function test_contractCreatorWithoutCallPath_strandsAllFeesForever() public {
+    function test_regression_contractCreatorWithoutCallPath_protocolShareStillFlows() public {
         DumbContract dumb = new DumbContract();
         vm.prank(address(dumb));
         (address t, address c) = factory.launch("Dumb", "DUMB", "ipfs://y", 0, 0);
         BondingCurve dumbCurve = BondingCurve(c);
-        vm.roll(block.number + 4);
+        _skipSnipeWindow();
 
-        usdg.mint(alice, 200_000 * USDG_UNIT);
-        vm.startPrank(alice);
-        usdg.approve(address(dumbCurve), type(uint256).max);
-        dumbCurve.buy(200_000 * USDG_UNIT, 0);
-        vm.stopPrank();
-        (, uint256 tokenId) = dumbCurve.graduate();
+        (, uint256 tokenId) = _fillCurve(dumbCurve, alice);
         assertEq(locker.beneficiaryOf(tokenId), address(dumb));
 
-        usdg.mint(address(pm), 1_000 * USDG_UNIT);
+        _creditUsdgFees(t, tokenId, 1_000 * USDG_UNIT);
         bool usdgIs1 = t < address(usdg);
-        pm.creditFees(tokenId, usdgIs1 ? 0 : 1_000 * USDG_UNIT, usdgIs1 ? 1_000 * USDG_UNIT : 0);
 
-        // Nobody else can trigger it — not the vault signers, not the manager.
+        // Nobody else can collect *for* the beneficiary...
         address[] memory callers = new address[](4);
-        callers[0] = makeAddr("s1");
+        callers[0] = makeAddr("signer1");
         callers[1] = address(manager);
         callers[2] = address(vault);
         callers[3] = attacker;
@@ -207,46 +168,49 @@ contract LPLockerAuditTest is Test {
             vm.expectRevert(LPLocker.NotBeneficiary.selector);
             locker.collectFees(tokenId);
         }
+
+        // ...but anyone can move the protocol's share.
+        uint256 vaultBefore = usdg.balanceOf(address(vault));
+        vm.prank(attacker);
+        locker.sweepProtocolFees(tokenId);
+        uint256 protocol = 1_000 * USDG_UNIT * PROTOCOL_FEE_SHARE_BPS / 10_000;
+        assertEq(usdg.balanceOf(address(vault)) - vaultBefore, protocol, "protocol share not swept");
+        uint256 owed = usdgIs1 ? locker.creatorOwed1(tokenId) : locker.creatorOwed0(tokenId);
+        assertEq(owed, 1_000 * USDG_UNIT - protocol, "creator share not credited");
+        assertEq(usdg.balanceOf(address(dumb)), 0, "creator share was pushed to a contract that cannot use it");
     }
 
-    // ── Anyone can lock anything, labelled as anything ───────────────────────
+    // ── Only the manager's positions are accepted ────────────────────────────
 
     /**
-     * LOW. `onERC721Received` only checks msg.sender == positionManager, and
-     * `GraduationManager.migrate` is permissionless. Any NFT holder can lock any
-     * position in the locker and label it with a legitimate launch token and
-     * themselves as beneficiary; `migrate` additionally emits `Migrated` for a
-     * token that has not graduated. The indexer keys graduation off the curve's
-     * `Graduated` event, so status is not spoofable, but `PositionLocked(token)`
-     * and `tokenOf` are not trustworthy on their own.
+     * Was LOW: `onERC721Received` only checked msg.sender == positionManager,
+     * and `migrate` was permissionless, so anyone could lock any position under
+     * any token/creator label. Both doors are shut.
      */
-    function test_strangerCanLockAPositionLabelledWithSomeoneElsesToken() public {
-        // Attacker buys a few tokens from the still-live curve.
+    function test_regression_strangerCannotLockAPositionLabelledWithSomeoneElsesToken() public {
         usdg.mint(attacker, 100 * USDG_UNIT);
         vm.startPrank(attacker);
         usdg.approve(address(curve), type(uint256).max);
-        curve.buy(100 * USDG_UNIT, 0);
+        curve.buy(100 * USDG_UNIT, 0, block.timestamp);
         uint256 held = token.balanceOf(attacker);
 
-        // ... and "migrates" them, before graduation, naming themselves creator.
+        // Through the manager: refused.
         token.approve(address(manager), held);
         usdg.mint(attacker, 1 * USDG_UNIT);
         usdg.approve(address(manager), 1 * USDG_UNIT);
-        (, uint256 tokenId) = manager.migrate(address(token), held, 1 * USDG_UNIT, attacker);
+        vm.expectRevert(GraduationManager.NotACurve.selector);
+        manager.migrate(address(token), held, 1 * USDG_UNIT, attacker);
         vm.stopPrank();
 
-        assertFalse(curve.graduated(), "curve did not graduate");
-        assertEq(locker.tokenOf(tokenId), address(token), "labelled with the real launch token");
-        assertEq(locker.beneficiaryOf(tokenId), attacker, "attacker is beneficiary");
-        assertEq(locker.lockedCount(), 1);
-
-        // The same is possible without the manager: any NPM holder can
-        // safeTransferFrom with forged data.
+        // Around the manager, with a real position and forged data: refused.
         uint256 id2 = _mintDummyPosition(attacker);
         vm.prank(attacker);
+        vm.expectRevert(LPLocker.NotGraduationManager.selector);
         pm.safeTransferFrom(attacker, address(locker), id2, abi.encode(address(token), attacker));
-        assertEq(locker.tokenOf(id2), address(token));
-        assertEq(locker.lockedCount(), 2);
+
+        assertEq(locker.lockedCount(), 0);
+        assertEq(locker.tokenOf(id2), address(0));
+        assertEq(pm.ownerOf(id2), attacker);
     }
 
     /// A position pushed in with plain `transferFrom` (no callback) has no
@@ -260,40 +224,27 @@ contract LPLockerAuditTest is Test {
         vm.prank(alice);
         vm.expectRevert(LPLocker.UnknownPosition.selector);
         locker.collectFees(id);
+        vm.expectRevert(LPLocker.UnknownPosition.selector);
+        locker.sweepProtocolFees(id);
     }
 
     /// A tokenId can only be registered once; the mapping cannot be overwritten.
     function test_tokenIdCannotBeReRegistered() public {
-        _fillCurve();
-        (, uint256 tokenId) = curve.graduate();
+        (, uint256 tokenId) = _fillCurve(curve, alice);
         vm.prank(address(pm));
         vm.expectRevert(LPLocker.AlreadyLocked.selector);
-        locker.onERC721Received(address(0), address(0), tokenId, abi.encode(address(token), attacker));
+        locker.onERC721Received(address(manager), address(manager), tokenId, abi.encode(address(token), attacker));
         assertEq(locker.beneficiaryOf(tokenId), creator);
     }
 
-    // ── Fee-on-transfer pool token bricks collection ─────────────────────────
-
-    /**
-     * INFO. If either pool token skims on transfer, `collect` delivers less
-     * than it reports and the split transfers revert: fees on that position
-     * become uncollectable forever. Not reachable with HoodiumToken (standard)
-     * and only reachable via USDG if T0.2 turns out badly — in which case the
-     * curve already refuses to launch. Recorded so the dependency is explicit.
+    /*
+     * INFO, kept for the record: if either pool token skimmed on transfer,
+     * `collect` would deliver less than it reports and the split transfers
+     * would revert, bricking fee collection on that position. Not reachable:
+     * the only positions that can enter are the manager's, whose sides are a
+     * HoodiumToken (plain OZ ERC20) and USDG, and the curve already refuses a
+     * USDG that does not deliver what was requested.
      */
-    function test_feeOnTransferPoolToken_bricksCollectFees() public {
-        FeeOnTransferUSDG fot = new FeeOnTransferUSDG();
-        uint256 id = _mintPosition(alice, address(fot), address(usdg));
-        vm.prank(alice);
-        pm.safeTransferFrom(alice, address(locker), id, abi.encode(address(0), alice));
-
-        fot.mint(address(pm), 1_000e6);
-        pm.creditFees(id, 1_000e6, 0);
-
-        vm.prank(alice);
-        vm.expectRevert(); // SafeERC20 transfer of more than the locker received
-        locker.collectFees(id);
-    }
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -301,11 +252,8 @@ contract LPLockerAuditTest is Test {
         MockUSDG a = new MockUSDG();
         MockUSDG b = new MockUSDG();
         (address t0, address t1) = address(a) < address(b) ? (address(a), address(b)) : (address(b), address(a));
-        return _mintPosition(to, t0, t1);
-    }
-
-    function _mintPosition(address to, address t0, address t1) internal returns (uint256 id) {
-        if (t0 > t1) (t0, t1) = (t1, t0);
+        address pool = uniFactory.createPool(t0, t1, POOL_FEE);
+        MockUniswapPool(pool).initialize(uint160(Q96)); // 1:1
         MockUSDG(t0).mint(address(this), 1e6);
         MockUSDG(t1).mint(address(this), 1e6);
         IERC20(t0).approve(address(pm), 1e6);
@@ -314,7 +262,7 @@ contract LPLockerAuditTest is Test {
             INonfungiblePositionManager.MintParams({
                 token0: t0,
                 token1: t1,
-                fee: 10_000,
+                fee: POOL_FEE,
                 tickLower: -887200,
                 tickUpper: 887200,
                 amount0Desired: 1e6,

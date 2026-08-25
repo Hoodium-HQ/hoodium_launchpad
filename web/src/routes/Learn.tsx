@@ -39,7 +39,10 @@ const QUOTE_UNIT = 10n ** BigInt(env.quoteDecimals)
 
 const DEFAULT_TOTAL_SUPPLY = 1_000_000_000n * TOKEN_UNIT
 const DEFAULT_CURVE_ALLOCATION = 800_000_000n * TOKEN_UNIT
-const DEFAULT_VIRTUAL_USDG = 12_000n * QUOTE_UNIT
+// The factory derives both virtual reserves from the allocations and target so
+// the pool opens at exactly the curve's closing price; 23,000 is what the
+// deploy defaults come out at, not a chosen number.
+const DEFAULT_VIRTUAL_USDG = 23_000n * QUOTE_UNIT
 const DEFAULT_GRADUATION_TARGET = 69_000n * QUOTE_UNIT
 const DEFAULT_LP_PROTOCOL_SHARE_BPS = 3_000
 
@@ -163,7 +166,7 @@ export function Learn() {
           <Step n={1} title="Launch" art="rocket">
             Pick a name, a symbol and an image; the image is pinned to IPFS. The creation fee is{' '}
             <Num>{creationFee}</Num>. The creator may buy in the same transaction, capped at{' '}
-            <Num>{devBuyMax}%</Num> of supply.
+            <Num>{devBuyMax}%</Num> of supply; anything over the cap is returned to them.
           </Step>
           <Step n={2} title="Curve" art="curve">
             Buy and sell against the curve. The price rises with every buy and falls with every sell. Each
@@ -171,14 +174,15 @@ export function Learn() {
             <Num>{hoodiumShare}%</Num> to Hoodium.
           </Step>
           <Step n={3} title="Graduation" art="graduation">
-            At <Num>{target}</Num> raised, the curve closes in one atomic transaction. The remaining{' '}
-            {env.quoteSymbol} and the <Num>{lpAllocationCompact}</Num> pool allocation seed a full-range
-            Uniswap v3 pool on the 1% fee tier.
+            The buy that brings the raise to <Num>{target}</Num> closes the curve and creates the pool in
+            the same transaction. The raised {env.quoteSymbol} and the <Num>{lpAllocationCompact}</Num> pool
+            allocation seed a full-range Uniswap v3 pool on the 1% fee tier, opening at exactly the curve's
+            closing price.
           </Step>
           <Step n={4} title="Locked pool" art="padlock">
             The LP NFT sits in a locker with no withdrawal function. Only accrued swap fees can be
             collected, split <Num>{lpCreatorShare}%</Num> to the creator and <Num>{lpProtocolShare}%</Num>{' '}
-            to the protocol.
+            to the protocol. Anyone can sweep the protocol's share; the creator's is held for them.
           </Step>
         </ol>
       </Section>
@@ -201,11 +205,11 @@ export function Learn() {
           <Figure
             label="Virtual reserves"
             value={virtualUsdg}
-            note={`The curve starts as if ${virtualUsdg} were already in it, so the first buyer pays a real price without anyone seeding capital.`}
+            note={`Derived from the allocations and target, not chosen: the curve starts as if ${virtualUsdg} were already in it, and the pool opens at exactly the curve's closing price.`}
           />
           <Figure label="Trade fee" value={`${tradeFee}%`} note="On every curve buy and sell." />
           <Figure label="Creation fee" value={creationFee} note="Paid once, when the token launches." />
-          <Figure label="Graduation fee" value={graduationFee} note="Taken from the raise when the curve closes." />
+          <Figure label="Graduation fee" value={graduationFee} note="Taken from the raise when the curve closes; accrued on the curve for anyone to sweep to the vault." />
         </div>
       </Section>
 
@@ -219,6 +223,14 @@ export function Learn() {
             A buy adds {env.quoteSymbol} to the left factor and removes tokens from the right one; a sell is
             the reverse. <span className="text-foreground">k</span> never changes, so the more that has been
             raised, the fewer tokens each {env.quoteSymbol} buys.
+          </p>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            Both virtual reserves are solved from the allocations and the target: the curve sells out exactly
+            at the target, and the pool's opening price equals the curve's last price. Nobody picks them.
+          </p>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            Every trade carries a ten-minute deadline and a minimum output; past either, it reverts and
+            nothing is spent.
           </p>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             Rounding always favours the curve: you receive slightly less, never more. That is what keeps the
@@ -251,8 +263,9 @@ export function Learn() {
               rate="1% tier, as Uniswap charges it"
               goesTo={
                 <>
-                  Creator <Num>{lpCreatorShare}%</Num> · protocol <Num>{lpProtocolShare}%</Num>. Collected by
-                  the creator; the principal never moves.
+                  Creator <Num>{lpCreatorShare}%</Num> · protocol <Num>{lpProtocolShare}%</Num>. The creator
+                  collects; anyone may sweep the protocol's share, with the creator's part held for them. The
+                  principal never moves.
                 </>
               }
             />
@@ -268,12 +281,15 @@ export function Learn() {
       <Section label="Protections" art="shield" blurb="What the contracts enforce, not what a policy promises.">
         <div className="grid gap-3 sm:grid-cols-2">
           <Point title="Anti-snipe">
-            For the first <Num>{t.snipeBlocks}</Num> blocks a single buy is capped at <Num>{snipeMax}%</Num>{' '}
-            of supply. The dev buy is exempt because it executes inside the launch transaction.
+            For the first <Num>{t.snipeBlocks}</Num> blocks each address may buy at most <Num>{snipeMax}%</Num>{' '}
+            of supply in total — the cap is cumulative, so looping small buys does not get around it. The dev
+            buy is not capped, because nothing can precede it, but it counts against the creator's allowance.
           </Point>
           <Point title="Atomic graduation">
-            Either everything happens — the curve closes, the pool is created, the LP NFT is locked — or
-            nothing does. If graduation fails, the curve stays tradeable.
+            The buy that reaches the target closes the curve, creates the pool and locks the LP NFT in that
+            one transaction; once the target is reached, sells are refused. A pool someone made early at a
+            hostile price is re-priced, or, if it holds liquidity, refused until the price is arbitraged back
+            — graduation can be delayed, never broken.
           </Point>
           <Point title="No admin">
             The factory, every curve, the graduation manager and the locker are immutable and unowned.
@@ -282,6 +298,11 @@ export function Learn() {
           <Point title="Principal cannot leave">
             The locker has no transfer, no decreaseLiquidity and no burn. The only function that moves
             value is fee collection.
+          </Point>
+          <Point title="Nothing is pushed">
+            Graduation pays nobody directly. The fee accrues on the curve, leftovers from seeding the pool
+            are credited to the creator to pull, and swept pool fees are held for them — so a frozen
+            {env.quoteSymbol} address can never block a graduation.
           </Point>
         </div>
       </Section>
@@ -339,6 +360,10 @@ export function Learn() {
             <Def term="Graduation">The moment the curve hits its target and hands trading to a locked pool.</Def>
             <Def term="Virtual reserves">
               Starting balances the curve prices against as if they were real, so the first trade has a price.
+              Derived from the terms so the pool opens where the curve closed.
+            </Def>
+            <Def term="Leftover">
+              The sliver of either side the pool did not take when seeded. Credited to the creator to pull.
             </Def>
             <Def term="Full-range">
               Liquidity spread across every possible price, so the pool can never run out of one side.

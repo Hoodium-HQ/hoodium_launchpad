@@ -7,6 +7,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {BondingCurve} from "./BondingCurve.sol";
 import {HoodiumToken} from "./HoodiumToken.sol";
+import {IGraduationManager} from "./interfaces/IGraduationManager.sol";
 
 /**
  * @title HoodiumFactory
@@ -17,6 +18,25 @@ import {HoodiumToken} from "./HoodiumToken.sol";
  * deployment, so a creator can read them before launching and know they cannot
  * move afterwards. Changing terms means deploying a new factory; tokens already
  * launched keep the terms they launched under.
+ *
+ * ── Price continuity (AUDIT H3) ──────────────────────────────────────────────
+ * The pool must open at the price the curve closed at. If it opens lower, every
+ * late buyer is instantly underwater and rational buyers refuse the tail of the
+ * curve; if higher, the LP allocation is under-priced against the raise. Both
+ * virtual reserves are therefore *derived* from the allocations and the target,
+ * never configured:
+ *
+ *   sold-out at target:   vT = C · vU / target
+ *   continuity:           lpAllocation = vT · (target − fee) / (vU + target)
+ *
+ * Solving both for vU gives
+ *
+ *   vU = lpAllocation · target² / (C · (target − fee) − lpAllocation · target)
+ *
+ * which with the shipped allocations (800M curve, 200M pool, 69k target, no
+ * fee) is 23,000 USDG. The constructor recomputes the continuity value from the
+ * derived reserves and refuses to deploy if it is more than 0.5% off, so a
+ * rounding surprise cannot ship either.
  */
 contract HoodiumFactory is ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -43,6 +63,9 @@ contract HoodiumFactory is ReentrancyGuard {
     uint256 public immutable snipeBlocks; // LP-2.5, default 3
     uint256 public immutable snipeMaxBps; // LP-2.5, default 100 = 1%
     uint8 public immutable tokenDecimals;
+
+    /// Continuity tolerance on `lpAllocation`, in basis points (0.5%).
+    uint256 public constant CONTINUITY_TOLERANCE_BPS = 50;
 
     struct Launch {
         address token;
@@ -76,7 +99,6 @@ contract HoodiumFactory is ReentrancyGuard {
         uint8 tokenDecimals;
         uint256 totalSupply;
         uint256 curveAllocation;
-        uint256 virtualUsdg;
         uint256 graduationTarget;
         uint256 graduationFee;
         uint256 tradeFeeBps;
@@ -92,7 +114,6 @@ contract HoodiumFactory is ReentrancyGuard {
         require(c.graduationManager != address(0), "zero manager");
         require(c.curveAllocation > 0 && c.curveAllocation < c.totalSupply, "bad allocation");
         require(c.graduationTarget > c.graduationFee, "fee >= target");
-        require(c.virtualUsdg > 0, "zero virtual usdg");
         require(c.tradeFeeBps < BPS && c.creatorFeeShareBps <= BPS, "bad bps");
         require(c.devBuyMaxBps <= BPS && c.snipeMaxBps <= BPS, "bad caps");
 
@@ -104,7 +125,6 @@ contract HoodiumFactory is ReentrancyGuard {
         totalSupply = c.totalSupply;
         curveAllocation = c.curveAllocation;
         lpAllocation = c.totalSupply - c.curveAllocation;
-        virtualUsdg = c.virtualUsdg;
         graduationTarget = c.graduationTarget;
         graduationFee = c.graduationFee;
         tradeFeeBps = c.tradeFeeBps;
@@ -115,19 +135,32 @@ contract HoodiumFactory is ReentrancyGuard {
         snipeMaxBps = c.snipeMaxBps;
 
         /*
-         * Virtual token reserve is derived, not configured:
-         *
-         *   tokensSold(target) = (vT + C) x target / (vU + target)
-         *
-         * Setting that equal to C — the whole curve allocation sold exactly when
-         * the target is hit — and solving gives vT = C x vU / target.
-         *
-         * Deriving it removes a way to misconfigure a launch: a hand-picked vT
-         * that disagrees with the target leaves either unsold tokens at
-         * graduation or a curve that runs out of supply before reaching it.
+         * Both virtual reserves are derived, not configured (AUDIT H3; see the
+         * contract comment for the algebra). Deriving them removes two ways to
+         * misconfigure a launch: a hand-picked vT that disagrees with the target
+         * leaves either unsold tokens at graduation or a curve that runs out of
+         * supply before reaching it, and a hand-picked vU opens the pool at a
+         * different price from the one the curve closed at.
          */
-        virtualTokens = Math.mulDiv(c.curveAllocation, c.virtualUsdg, c.graduationTarget);
+        uint256 usdgForLp = c.graduationTarget - c.graduationFee;
+        uint256 lpTimesTarget = lpAllocation * c.graduationTarget;
+        require(c.curveAllocation * usdgForLp > lpTimesTarget, "lp allocation too large for continuity");
+        virtualUsdg = Math.mulDiv(lpTimesTarget, c.graduationTarget, c.curveAllocation * usdgForLp - lpTimesTarget);
+        require(virtualUsdg > 0, "virtual usdg underflow");
+        virtualTokens = Math.mulDiv(c.curveAllocation, virtualUsdg, c.graduationTarget);
         require(virtualTokens > 0, "virtual tokens underflow");
+
+        // Recompute continuity from the rounded reserves and refuse a mismatch.
+        uint256 continuity = Math.mulDiv(virtualTokens, usdgForLp, virtualUsdg + c.graduationTarget);
+        uint256 tolerance = Math.mulDiv(lpAllocation, CONTINUITY_TOLERANCE_BPS, BPS);
+        require(
+            continuity + tolerance >= lpAllocation && continuity <= lpAllocation + tolerance,
+            "lp allocation breaks price continuity"
+        );
+
+        // The manager was deployed with this factory's precomputed address
+        // (AUDIT M1). A nonce miscount fails here, before any launch.
+        require(IGraduationManager(c.graduationManager).factory() == address(this), "manager/factory mismatch");
     }
 
     // ── Views ────────────────────────────────────────────────────────────────
@@ -172,20 +205,24 @@ contract HoodiumFactory is ReentrancyGuard {
     ) external nonReentrant returns (address tokenAddress, address curveAddress) {
         (tokenAddress, curveAddress) = _deployPair(name, symbol, metadataURI);
 
+        // Registered before the dev buy: the manager only serves curves the
+        // factory knows (AUDIT M1), and a dev buy that completes the curve must
+        // be graduatable afterwards.
+        curveOf[tokenAddress] = curveAddress;
+
         if (creationFee > 0) {
             usdg.safeTransferFrom(msg.sender, feeVault, creationFee);
         }
 
-        uint256 devBuyTokens = _devBuy(curveAddress, devBuyUsdg, devBuyMinTokens);
+        (uint256 devBuySpent, uint256 devBuyTokens) = _devBuy(curveAddress, devBuyUsdg, devBuyMinTokens);
 
-        curveOf[tokenAddress] = curveAddress;
         _launches.push(
             Launch({token: tokenAddress, curve: curveAddress, creator: msg.sender, createdAt: uint64(block.timestamp)})
         );
         _launchesByCreator[msg.sender].push(tokenAddress);
 
         emit TokenLaunched(
-            tokenAddress, curveAddress, msg.sender, name, symbol, metadataURI, devBuyUsdg, devBuyTokens
+            tokenAddress, curveAddress, msg.sender, name, symbol, metadataURI, devBuySpent, devBuyTokens
         );
     }
 
@@ -230,12 +267,23 @@ contract HoodiumFactory is ReentrancyGuard {
         return (address(token), address(curve));
     }
 
-    /// @dev LP-1.6 — the creator's purchase, inside the deployment transaction.
+    /**
+     * @dev LP-1.6 — the creator's purchase, inside the deployment transaction.
+     * @return devBuySpent USDG the curve actually took (fee included).
+     * @return devBuyTokens tokens the creator received.
+     *
+     * The curve clamps at the target (LP-2.6), so when the dev-buy cap exceeds
+     * what the curve sells before the target, part of `devBuyUsdg` is not
+     * taken. That part is returned to the creator here rather than left in the
+     * factory (AUDIT L1). The factory holds no USDG of its own at any other time
+     * — the creation fee goes straight to the vault — so the whole balance is the
+     * refund.
+     */
     function _devBuy(address curveAddress, uint256 devBuyUsdg, uint256 minTokens)
         private
-        returns (uint256 devBuyTokens)
+        returns (uint256 devBuySpent, uint256 devBuyTokens)
     {
-        if (devBuyUsdg == 0) return 0;
+        if (devBuyUsdg == 0) return (0, 0);
 
         BondingCurve curve = BondingCurve(curveAddress);
 
@@ -249,5 +297,9 @@ contract HoodiumFactory is ReentrancyGuard {
         usdg.forceApprove(curveAddress, devBuyUsdg);
         devBuyTokens = curve.devBuy(msg.sender, devBuyUsdg, minTokens);
         usdg.forceApprove(curveAddress, 0);
+
+        uint256 leftover = usdg.balanceOf(address(this));
+        devBuySpent = devBuyUsdg - leftover;
+        if (leftover > 0) usdg.safeTransfer(msg.sender, leftover);
     }
 }

@@ -89,6 +89,25 @@
   },
   {
     "type": "function",
+    "name": "boughtInWindow",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "buy",
     "inputs": [
       {
@@ -98,6 +117,11 @@
       },
       {
         "name": "minTokensOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "deadline",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -302,7 +326,7 @@
     "inputs": [],
     "outputs": [
       {
-        "name": "pool",
+        "name": "pool_",
         "type": "address",
         "internalType": "address"
       },
@@ -394,6 +418,19 @@
   },
   {
     "type": "function",
+    "name": "lpTokenId",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "platformFeesAccrued",
     "inputs": [],
     "outputs": [
@@ -414,6 +451,19 @@
         "name": "",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "pool",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "view"
@@ -557,6 +607,11 @@
       },
       {
         "name": "minUsdgOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "deadline",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -883,6 +938,11 @@
   },
   {
     "type": "error",
+    "name": "CurveComplete",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "DevBuyAlreadyDone",
     "inputs": []
   },
@@ -890,6 +950,17 @@
     "type": "error",
     "name": "ExceedsSold",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "Expired",
+    "inputs": [
+      {
+        "name": "deadline",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
   },
   {
     "type": "error",

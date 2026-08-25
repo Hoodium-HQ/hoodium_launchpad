@@ -73,6 +73,31 @@ src/
 When `LAUNCHPAD_FACTORY` is empty or the zero address the indexer idles and the
 API serves empty lists and `terms: null` — the contracts are not deployed yet.
 
+### Contract mechanics the indexer relies on (post security fix pass)
+
+- **The completing buy graduates.** The buy that brings the reserve to the
+  target calls the migration in the same transaction, so `Bought` and
+  `Graduated` arrive from one tx, in that order; the loop applies them in log
+  order and the token flips to `graduated` in the same cycle. `sell` reverts
+  `CurveComplete` once the target is reached. The external `graduate()` remains
+  only for a dev buy that completes the curve at launch.
+- **`virtualUsdg` is derived, not configured.** The factory computes both
+  virtual reserves from the allocations and target so the pool opens at the
+  curve's closing price (23,000 USDG with the deploy defaults). `terms.ts`
+  still reads it from `virtualUsdg()` — nothing here assumes a value.
+- **Trades carry a `deadline`** (`buy(usdgIn, minTokensOut, deadline)`,
+  `sell(tokensIn, minUsdgOut, deadline)`). The indexer decodes events only,
+  never calldata, so the extra argument changes nothing here; the fragments in
+  `chain/abi.ts` carry it for anyone simulating a trade server-side.
+- **Anti-snipe is cumulative per address** (`boughtInWindow`), not per call.
+- **Fees and dust are pull-based.** The graduation fee accrues on the curve
+  (`claimPlatformFees`, anyone), migration dust is credited on the manager
+  (`dustOf` / `pullDust`), and the locker's protocol share can be swept by
+  anyone (`sweepProtocolFees`) with the creator's share held in
+  `creatorOwed0/1`. None of these is indexed; the web reads them live.
+- `pool()` and `lpTokenId()` are now curve getters too; the indexer keeps
+  taking both from the `Graduated` event, which always carries them.
+
 ### The `terms.ts` bug
 
 The historical `terms.ts` imported a symbol named `factoryAbi`, which in one

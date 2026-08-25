@@ -22,15 +22,15 @@ import {MockUniswapFactory, MockPositionManager} from "../test/mocks/MockUniswap
  *   forge script script/DeployLocal.s.sol --rpc-url http://127.0.0.1:8545 --broadcast
  *
  * It refuses to run anywhere except chain 31337. The mocks below are test doubles
- * — MockPositionManager mints ERC-721s that no real pool backs, and
- * MockUniswapFactory's pools hold no liquidity — so a graduation here proves the
- * call path works and nothing about the pool it would have created. On any real
- * chain that is a lie about where users' liquidity went, which is why the guard
- * is a `require` and not a comment.
+ * — MockPositionManager mints ERC-721s over a price-aware but tickless pool
+ * model — so a graduation here proves the call path and the pricing rules, and
+ * nothing about the real Uniswap deployment. On any real chain that is a lie
+ * about where users' liquidity went, which is why the guard is a `require` and
+ * not a comment.
  *
- * Parameters mirror `Deploy.s.sol` exactly. They are design.md section 2's
- * placeholders, still blocked on T0.1 — a local chain that behaves differently
- * from the deploy script it stands in for is worse than no local chain.
+ * Parameters mirror `Deploy.s.sol` exactly — a local chain that behaves
+ * differently from the deploy script it stands in for is worse than no local
+ * chain.
  */
 contract DeployLocal is Script {
     uint256 private constant ANVIL_CHAIN_ID = 31337;
@@ -60,7 +60,7 @@ contract DeployLocal is Script {
         // ── Stand-ins for what mainnet already has ───────────────────────────
         MockUSDG usdg = new MockUSDG();
         MockUniswapFactory uniswapFactory = new MockUniswapFactory();
-        MockPositionManager positionManager = new MockPositionManager();
+        MockPositionManager positionManager = new MockPositionManager(uniswapFactory);
 
         usdg.mint(deployer, 10_000_000 * usdgUnit);
         if (seedWallet != deployer) usdg.mint(seedWallet, 10_000_000 * usdgUnit);
@@ -74,17 +74,28 @@ contract DeployLocal is Script {
         owners[2] = vm.addr(uint256(keccak256("hoodium.local.signer.3")));
 
         FeeVault vault = new FeeVault(owners, 2);
+
+        // Forward references, exactly as Deploy.s.sol does them: the locker
+        // names the manager and the manager names the factory before either
+        // exists. Nonce arithmetic from here: locker = n, manager = n+1,
+        // factory = n+2.
+        uint64 nonce = vm.getNonce(deployer);
+        address predictedManager = vm.computeCreateAddress(deployer, nonce + 1);
+        address predictedFactory = vm.computeCreateAddress(deployer, nonce + 2);
+
         // 30% of post-graduation pool fees to the protocol, 70% to the creator.
         // Mirrors Deploy.s.sol so local behaviour matches what would ship.
-        LPLocker locker = new LPLocker(address(positionManager), address(vault), 3_000);
+        LPLocker locker = new LPLocker(address(positionManager), address(vault), 3_000, predictedManager);
         GraduationManager manager = new GraduationManager(
             address(uniswapFactory),
             address(positionManager),
             address(locker),
             address(usdg),
             10_000, // 1% pool fee
-            200 // tick spacing for the 1% tier
+            200, // tick spacing for the 1% tier
+            predictedFactory
         );
+        require(address(manager) == predictedManager, "manager address drifted");
 
         HoodiumFactory factory = new HoodiumFactory(
             HoodiumFactory.FactoryConfig({
@@ -93,8 +104,7 @@ contract DeployLocal is Script {
                 graduationManager: address(manager),
                 tokenDecimals: 18,
                 totalSupply: 1_000_000_000 * tokenUnit,
-                curveAllocation: 800_000_000 * tokenUnit,
-                virtualUsdg: 12_000 * usdgUnit,
+                curveAllocation: 800_000_000 * tokenUnit, // virtual reserves derived: vU = 23,000 USDG
                 graduationTarget: 69_000 * usdgUnit,
                 graduationFee: 0, // LP-3.3 — the incumbent charges none
                 tradeFeeBps: 100, // 1% (LP-2.3)
@@ -105,6 +115,8 @@ contract DeployLocal is Script {
                 snipeMaxBps: 100 // 1% of supply per tx in the window
             })
         );
+
+        require(address(factory) == predictedFactory, "factory address drifted");
 
         vm.stopBroadcast();
 

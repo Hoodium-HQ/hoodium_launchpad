@@ -23,8 +23,19 @@ const COPY: Record<string, string> = {
 /** Contract custom errors, translated into something a trader can act on. */
 const REVERT_COPY: Record<string, string> = {
   SlippageExceeded: 'Price moved past your slippage limit. Nothing was spent — try again or raise the limit.',
-  AntiSnipeCapExceeded: 'Too large for the opening blocks. This launch caps early buys; try a smaller amount.',
+  AntiSnipeCapExceeded:
+    'Too large for the opening blocks. Each address may buy at most a small share of supply in total during the launch window; try a smaller amount or wait a few blocks.',
   AlreadyGraduated: 'This curve has closed — the token has graduated to a Uniswap pool.',
+  CurveComplete: 'Curve complete — trading has moved to the pool. Nothing was spent.',
+  Expired: 'This trade’s deadline passed before it was mined. Nothing was spent — submit it again.',
+  PoolPriceManipulated:
+    'This buy would complete the curve, but someone has primed the pool with liquidity at a hostile price. Graduation is blocked until the pool price is arbitraged back; try again later.',
+  UnexpectedSwapPayment:
+    'This buy would complete the curve, but the pool has liquidity in the way of its fair price. Graduation is blocked until the pool price is arbitraged back; try again later.',
+  ExcessiveDust: 'The pool would not take enough of the raise. Graduation is blocked until the pool price is arbitraged back; try again later.',
+  NothingToPull: 'Nothing is left over to pull.',
+  NotBeneficiary: 'Only the creator can collect these fees.',
+  NotGraduated: 'This token has not graduated yet.',
   ZeroAmount: 'That amount is too small to trade.',
   ExceedsSold: 'You cannot sell more than the curve has sold.',
   UnsupportedTokenBehaviour: 'This token behaves in a way the curve rejects. Nothing was spent.',

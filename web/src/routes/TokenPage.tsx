@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router'
 import { Address } from '@/components/Address'
 import { WrongChainBanner } from '@/components/Banners'
 import { CreatorFeesCard } from '@/components/CreatorFeesCard'
+import { LeftoverCard } from '@/components/LeftoverCard'
 import { CurveProgress } from '@/components/CurveProgress'
 import { PoolFeesCard } from '@/components/PoolFeesCard'
 import { RiskFlags } from '@/components/RiskFlag'
@@ -321,6 +322,7 @@ export function TokenPage() {
 
       {/* Renders for the creator only; returns null for everyone else. */}
       <CreatorFeesCard token={t} />
+      <LeftoverCard token={t} />
       <PoolFeesCard token={t} />
     </div>
   )

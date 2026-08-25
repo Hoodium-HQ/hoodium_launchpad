@@ -3,6 +3,7 @@ import { formatUnits, parseUnits } from 'viem'
 import { useAccount, useReadContract } from 'wagmi'
 import { env } from '@/config/env'
 import { useTransaction } from '@/hooks/useTransaction'
+import { tradeDeadline } from '@/lib/deadline'
 import { curveAbi, erc20Abi } from '@/lib/launchpad-abi'
 import type { TokenDetail } from '@/lib/launchpad-api'
 import { formatAmount, fromBaseUnits } from '@/lib/money'
@@ -26,6 +27,13 @@ import { TxStatus } from './TxStatus'
  * being recomputed here — one implementation, one answer. Balances are read
  * from the chain rather than from the holder index, which is blind to plain
  * transfers.
+ *
+ * Every trade carries a deadline (`@/lib/deadline`) so a signed transaction
+ * that sits in a mempool cannot execute at a price the user never saw. The buy
+ * that reaches the target graduates the curve in the same transaction — it
+ * creates and seeds the Uniswap pool, so it costs more gas and can be blocked
+ * by a hostilely primed pool; the panel says so before the signature. Once the
+ * curve is complete `sell` reverts, so the Sell side is withdrawn.
  */
 const SIDES = [
   { value: 'buy' as const, label: 'Buy' },
@@ -48,6 +56,10 @@ export function TradePanel({ token }: { token: TokenDetail }) {
 
   const curve = token.curve as `0x${string}`
   const graduated = token.status === 'graduated' || token.graduated
+  // Complete but not yet graduated is the dev-buy edge case: the target was
+  // reached inside the launch, and `graduate()` is waiting for anyone to call.
+  const complete = graduated || token.curveState.complete || token.curveState.progressBps >= 10_000
+  const remainingToTarget = BigInt(token.curveState.remaining || '0')
   const symbol = sanitizeText(token.symbol, 12) || '???'
   const name = sanitizeText(token.name, 24) || symbol
 
@@ -66,7 +78,7 @@ export function TradePanel({ token }: { token: TokenDetail }) {
     abi: curveAbi,
     functionName: 'quoteBuy',
     args: [parsedAmount],
-    query: { enabled: side === 'buy' && parsedAmount > 0n && !graduated },
+    query: { enabled: side === 'buy' && parsedAmount > 0n && !complete },
   })
 
   const { data: sellQuote } = useReadContract({
@@ -74,7 +86,7 @@ export function TradePanel({ token }: { token: TokenDetail }) {
     abi: curveAbi,
     functionName: 'quoteSell',
     args: [parsedAmount],
-    query: { enabled: side === 'sell' && parsedAmount > 0n && !graduated },
+    query: { enabled: side === 'sell' && parsedAmount > 0n && !complete },
   })
 
   const { data: allowance } = useReadContract({
@@ -107,6 +119,9 @@ export function TradePanel({ token }: { token: TokenDetail }) {
   const expectedOut = side === 'buy' ? (buyQuote?.[0] ?? 0n) : (sellQuote?.[0] ?? 0n)
   const fee = side === 'buy' ? (buyQuote?.[1] ?? 0n) : (sellQuote?.[1] ?? 0n)
   const refund = side === 'buy' ? (buyQuote?.[2] ?? 0n) : 0n
+  const netIn = side === 'buy' ? (buyQuote?.[3] ?? 0n) : 0n
+  // This buy would bring the reserve to the target: the curve graduates inside it.
+  const completesCurve = side === 'buy' && netIn > 0n && remainingToTarget > 0n && netIn >= remainingToTarget
 
   // What actually goes on-chain as the floor.
   const minOut = (expectedOut * BigInt(10_000 - slippageBps)) / 10_000n
@@ -145,8 +160,12 @@ export function TradePanel({ token }: { token: TokenDetail }) {
       address: curve,
       abi: curveAbi,
       functionName: side === 'buy' ? 'buy' : 'sell',
-      args: [parsedAmount, minOut],
+      args: [parsedAmount, minOut, tradeDeadline()],
     })
+  }
+
+  const graduate = async () => {
+    await tx.execute({ address: curve, abi: curveAbi, functionName: 'graduate', args: [] })
   }
 
   // The disclosure gates the first purchase; it does not merely precede it.
@@ -170,6 +189,27 @@ export function TradePanel({ token }: { token: TokenDetail }) {
             View the pool
           </a>
         )}
+      </Card>
+    )
+  }
+
+  if (complete) {
+    return (
+      <Card className="p-5 text-center">
+        <p className="text-card-title">Curve complete — trading moved to the pool</p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          The curve reached its target and no longer accepts buys or sells. The pool opens at the curve's
+          closing price; anyone can trigger the opening, and the transaction creates and seeds it, so it
+          costs more gas than a trade.
+        </p>
+        {isConnected ? (
+          <Button variant="primary" className="mt-4 w-full" disabled={tx.isBusy} onClick={() => void graduate()}>
+            {tx.isBusy ? 'Working…' : 'Open the pool'}
+          </Button>
+        ) : (
+          <ConnectButton variant="primary" size="lg" className="mt-4 w-full" label="Connect wallet to open the pool" />
+        )}
+        <TxStatus tx={tx} className="mt-3" />
       </Card>
     )
   }
@@ -273,6 +313,15 @@ export function TradePanel({ token }: { token: TokenDetail }) {
             </Row>
           )}
         </dl>
+      )}
+
+      {completesCurve && (
+        <p className="mt-3 rounded-xl border border-warning/40 bg-warning/10 p-3 text-xs text-foreground">
+          <span className="font-medium">This buy completes the curve.</span> It also creates and seeds the
+          Uniswap pool in the same transaction, so it costs more gas than a normal buy. If someone has primed
+          the pool with liquidity at a hostile price, it will not go through until the pool price is arbitraged
+          back — nothing is spent if it fails.
+        </p>
       )}
 
       {isConnected ? (

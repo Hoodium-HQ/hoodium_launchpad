@@ -60,7 +60,7 @@ contract HoodiumTokenAuditTest is BaseTest {
     function test_noStandingAllowancesAfterLaunch() public view {
         assertEq(token.balanceOf(address(factory)), 0);
         assertEq(token.allowance(address(factory), address(curve)), 0);
-        assertEq(token.allowance(address(curve), graduationManagerStub), 0);
+        assertEq(token.allowance(address(curve), address(manager)), 0);
         assertEq(token.allowance(address(curve), address(factory)), 0);
         assertEq(token.balanceOf(address(curve)), TOTAL_SUPPLY);
     }
@@ -102,7 +102,7 @@ contract HoodiumTokenAuditTest is BaseTest {
         vm.startPrank(alice);
         token.approve(address(curve), type(uint256).max);
         vm.expectRevert(BondingCurve.ExceedsSold.selector);
-        curve.sell(sold + 1, 0);
+        curve.sell(sold + 1, 0, block.timestamp);
         vm.stopPrank();
     }
 }

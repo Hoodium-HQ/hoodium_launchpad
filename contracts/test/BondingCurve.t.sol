@@ -27,7 +27,7 @@ contract BondingCurveTest is BaseTest {
     function test_initialK_matchesReserves() public view {
         assertEq(curve.currentK(), curve.initialK(), "k at deployment");
         assertEq(curve.reserveX(), VIRTUAL_USDG);
-        assertEq(curve.reserveY(), 12_000 * 1e6 * CURVE_ALLOCATION / GRADUATION_TARGET + CURVE_ALLOCATION);
+        assertEq(curve.reserveY(), VIRTUAL_USDG * CURVE_ALLOCATION / GRADUATION_TARGET + CURVE_ALLOCATION);
     }
 
     function testFuzz_k_neverDecreasesOnBuy(uint96 usdgIn) public {
@@ -37,8 +37,10 @@ contract BondingCurveTest is BaseTest {
         _fund(alice, usdgIn);
         vm.startPrank(alice);
         usdg.approve(address(curve), usdgIn);
-        try curve.buy(usdgIn, 0) {
-            assertGe(curve.currentK(), kBefore, "k decreased on buy");
+        try curve.buy(usdgIn, 0, block.timestamp) {
+            // A completing buy graduates and zeroes the reserve; k is then
+            // meaningless, and the curve refuses every further trade.
+            if (!curve.graduated()) assertGe(curve.currentK(), kBefore, "k decreased on buy");
         } catch {
             assertEq(curve.currentK(), kBefore, "k moved on a reverted buy");
         }
@@ -54,7 +56,7 @@ contract BondingCurveTest is BaseTest {
                 _fund(alice, amount);
                 vm.startPrank(alice);
                 usdg.approve(address(curve), amount);
-                try curve.buy(amount, 0) {} catch {}
+                try curve.buy(amount, 0, block.timestamp) {} catch {}
                 vm.stopPrank();
             } else {
                 uint256 held = token.balanceOf(alice);
@@ -62,10 +64,11 @@ contract BondingCurveTest is BaseTest {
                 uint256 amount = bound(amounts[i], 1, held);
                 vm.startPrank(alice);
                 token.approve(address(curve), amount);
-                try curve.sell(amount, 0) {} catch {}
+                try curve.sell(amount, 0, block.timestamp) {} catch {}
                 vm.stopPrank();
             }
 
+            if (curve.graduated()) break;
             uint256 kNow = curve.currentK();
             assertGe(kNow, kBefore, "k decreased across the sequence");
             kBefore = kNow;
@@ -81,13 +84,13 @@ contract BondingCurveTest is BaseTest {
         vm.startPrank(alice);
         usdg.approve(address(curve), usdgIn);
         uint256 spent = usdg.balanceOf(alice);
-        uint256 tokensOut = curve.buy(usdgIn, 0);
+        uint256 tokensOut = curve.buy(usdgIn, 0, block.timestamp);
         spent -= usdg.balanceOf(alice);
 
         vm.assume(tokensOut > 0);
 
         token.approve(address(curve), tokensOut);
-        uint256 received = curve.sell(tokensOut, 0);
+        uint256 received = curve.sell(tokensOut, 0, block.timestamp);
         vm.stopPrank();
 
         assertLe(received, spent, "round trip returned more than it cost");
@@ -103,12 +106,12 @@ contract BondingCurveTest is BaseTest {
         vm.startPrank(alice);
         usdg.approve(address(curve), usdgIn);
         uint256 before = usdg.balanceOf(alice);
-        uint256 tokensOut = curve.buy(usdgIn, 0);
+        uint256 tokensOut = curve.buy(usdgIn, 0, block.timestamp);
         uint256 spent = before - usdg.balanceOf(alice);
         vm.assume(tokensOut > 0);
 
         token.approve(address(curve), tokensOut);
-        uint256 received = curve.sell(tokensOut, 0);
+        uint256 received = curve.sell(tokensOut, 0, block.timestamp);
         vm.stopPrank();
 
         assertLe(received, spent, "round trip profited after other trades");
@@ -124,10 +127,10 @@ contract BondingCurveTest is BaseTest {
             _fund(alice, 1);
             vm.startPrank(alice);
             usdg.approve(address(curve), 1);
-            try curve.buy(1, 0) returns (uint256 out) {
+            try curve.buy(1, 0, block.timestamp) returns (uint256 out) {
                 if (out > 0) {
                     token.approve(address(curve), out);
-                    try curve.sell(out, 0) {} catch {}
+                    try curve.sell(out, 0, block.timestamp) {} catch {}
                 }
             } catch {}
             vm.stopPrank();
@@ -147,14 +150,14 @@ contract BondingCurveTest is BaseTest {
         // no net input and nothing to mint. Reverting is correct — the
         // alternative is taking the wei and giving back zero tokens.
         vm.expectRevert(BondingCurve.ZeroAmount.selector);
-        curve.buy(1, 0);
+        curve.buy(1, 0, block.timestamp);
         vm.stopPrank();
     }
 
     function test_buy_zero_reverts() public {
         vm.prank(alice);
         vm.expectRevert(BondingCurve.ZeroAmount.selector);
-        curve.buy(0, 0);
+        curve.buy(0, 0, block.timestamp);
     }
 
     function test_sell_moreThanSold_reverts() public {
@@ -164,7 +167,7 @@ contract BondingCurveTest is BaseTest {
         vm.startPrank(alice);
         token.approve(address(curve), type(uint256).max);
         vm.expectRevert(BondingCurve.ExceedsSold.selector);
-        curve.sell(held + CURVE_ALLOCATION, 0);
+        curve.sell(held + CURVE_ALLOCATION, 0, block.timestamp);
         vm.stopPrank();
     }
 
@@ -176,13 +179,18 @@ contract BondingCurveTest is BaseTest {
         vm.startPrank(alice);
         usdg.approve(address(curve), huge);
         uint256 before = usdg.balanceOf(alice);
-        curve.buy(huge, 0);
+        curve.buy(huge, 0, block.timestamp);
         uint256 spent = before - usdg.balanceOf(alice);
         vm.stopPrank();
 
-        assertEq(curve.reserveUsdg(), GRADUATION_TARGET, "reserve should stop exactly at target");
+        // The completing buy graduates in the same call (AUDIT H2), so the
+        // reserve has already moved to the pool; what was taken is what the
+        // curve could absorb plus the fee on it, and not a unit more.
+        uint256 expectedFee = (GRADUATION_TARGET * TRADE_FEE_BPS + (10_000 - TRADE_FEE_BPS) - 1) / (10_000 - TRADE_FEE_BPS);
+        assertEq(spent, GRADUATION_TARGET + expectedFee, "took more than target + fee");
         assertLt(spent, huge, "excess should not have been taken");
-        assertTrue(curve.curveComplete(), "curve should be complete");
+        assertTrue(curve.graduated(), "completing buy should graduate");
+        assertEq(curve.reserveUsdg(), 0, "reserve migrated");
     }
 
     function test_exactTargetBuy_completesWithoutRefund() public {
@@ -193,22 +201,52 @@ contract BondingCurveTest is BaseTest {
         _fund(alice, gross);
         vm.startPrank(alice);
         usdg.approve(address(curve), gross);
-        curve.buy(gross, 0);
+        uint256 before = usdg.balanceOf(alice);
+        curve.buy(gross, 0, block.timestamp);
         vm.stopPrank();
 
-        assertEq(curve.reserveUsdg(), GRADUATION_TARGET);
-        assertTrue(curve.curveComplete());
+        assertTrue(curve.graduated());
+        assertLe(before - usdg.balanceOf(alice), gross);
     }
 
     function test_buysAfterCompletion_revert() public {
         _buy(curve, alice, 200_000 * USDG_UNIT);
-        assertTrue(curve.curveComplete());
+        assertTrue(curve.graduated());
 
         _fund(bob, 1_000 * USDG_UNIT);
         vm.startPrank(bob);
         usdg.approve(address(curve), 1_000 * USDG_UNIT);
-        vm.expectRevert(BondingCurve.ZeroAmount.selector);
-        curve.buy(1_000 * USDG_UNIT, 0);
+        vm.expectRevert(BondingCurve.AlreadyGraduated.selector);
+        curve.buy(1_000 * USDG_UNIT, 0, block.timestamp);
+        vm.stopPrank();
+    }
+
+    // ── Deadlines (AUDIT L5) ─────────────────────────────────────────────────
+
+    function test_buy_pastDeadline_reverts() public {
+        _fund(alice, 1_000 * USDG_UNIT);
+        vm.startPrank(alice);
+        usdg.approve(address(curve), 1_000 * USDG_UNIT);
+        vm.expectRevert(abi.encodeWithSelector(BondingCurve.Expired.selector, block.timestamp - 1));
+        curve.buy(1_000 * USDG_UNIT, 0, block.timestamp - 1);
+        vm.stopPrank();
+    }
+
+    function test_sell_pastDeadline_reverts() public {
+        _buy(curve, alice, 1_000 * USDG_UNIT);
+        uint256 held = token.balanceOf(alice);
+        vm.startPrank(alice);
+        token.approve(address(curve), held);
+        vm.expectRevert(abi.encodeWithSelector(BondingCurve.Expired.selector, block.timestamp - 1));
+        curve.sell(held, 0, block.timestamp - 1);
+        vm.stopPrank();
+    }
+
+    function test_deadlineAtCurrentTimestamp_isAccepted() public {
+        _fund(alice, 1_000 * USDG_UNIT);
+        vm.startPrank(alice);
+        usdg.approve(address(curve), 1_000 * USDG_UNIT);
+        assertGt(curve.buy(1_000 * USDG_UNIT, 0, block.timestamp), 0);
         vm.stopPrank();
     }
 
@@ -221,7 +259,7 @@ contract BondingCurveTest is BaseTest {
         vm.startPrank(alice);
         usdg.approve(address(curve), 1_000 * USDG_UNIT);
         vm.expectRevert(abi.encodeWithSelector(BondingCurve.SlippageExceeded.selector, quoted, quoted + 1));
-        curve.buy(1_000 * USDG_UNIT, quoted + 1);
+        curve.buy(1_000 * USDG_UNIT, quoted + 1, block.timestamp);
         vm.stopPrank();
     }
 
@@ -233,7 +271,7 @@ contract BondingCurveTest is BaseTest {
         vm.startPrank(alice);
         token.approve(address(curve), held);
         vm.expectRevert(abi.encodeWithSelector(BondingCurve.SlippageExceeded.selector, quoted, quoted + 1));
-        curve.sell(held, quoted + 1);
+        curve.sell(held, quoted + 1, block.timestamp);
         vm.stopPrank();
     }
 
@@ -260,8 +298,51 @@ contract BondingCurveTest is BaseTest {
         vm.startPrank(alice);
         usdg.approve(address(fresh), big);
         vm.expectRevert(abi.encodeWithSelector(BondingCurve.AntiSnipeCapExceeded.selector, quoted, cap));
-        fresh.buy(big, 0);
+        fresh.buy(big, 0, block.timestamp);
         vm.stopPrank();
+    }
+
+    /// AUDIT H1 — the cap is cumulative per address, not per call.
+    function test_antiSnipe_cumulativeBuysPerAddressAreCapped() public {
+        (, BondingCurve fresh) = _launch();
+        uint256 cap = TOTAL_SUPPLY * SNIPE_MAX_BPS / 10_000;
+
+        // Each call alone is well under the cap; together they exceed it.
+        uint256 perCall = 100 * USDG_UNIT;
+        uint256 total;
+        uint256 calls;
+        while (true) {
+            (uint256 quoted,,,) = fresh.quoteBuy(perCall);
+            if (total + quoted > cap) break;
+            total += _buy(fresh, alice, perCall);
+            calls++;
+        }
+        assertGt(calls, 1, "fixture: cap should take several calls to reach");
+        assertEq(fresh.boughtInWindow(alice), total);
+
+        (uint256 next,,,) = fresh.quoteBuy(perCall);
+        _fund(alice, perCall);
+        vm.startPrank(alice);
+        usdg.approve(address(fresh), perCall);
+        vm.expectRevert(abi.encodeWithSelector(BondingCurve.AntiSnipeCapExceeded.selector, total + next, cap));
+        fresh.buy(perCall, 0, block.timestamp);
+        vm.stopPrank();
+
+        // Another address has its own allowance.
+        assertGt(_buy(fresh, bob, perCall), 0);
+    }
+
+    function test_antiSnipe_windowCounterIsNotConsultedAfterTheWindow() public {
+        (, BondingCurve fresh) = _launch();
+        uint256 cap = TOTAL_SUPPLY * SNIPE_MAX_BPS / 10_000;
+        _buy(fresh, alice, 100 * USDG_UNIT);
+        uint256 inWindow = fresh.boughtInWindow(alice);
+        assertGt(inWindow, 0);
+
+        vm.roll(block.number + SNIPE_BLOCKS);
+        uint256 out = _buy(fresh, alice, 40_000 * USDG_UNIT);
+        assertGt(out, cap, "cap should no longer apply");
+        assertEq(fresh.boughtInWindow(alice), inWindow, "counter should not move outside the window");
     }
 
     function test_antiSnipe_smallBuyInFirstBlockSucceeds() public {
@@ -367,7 +448,7 @@ contract BondingCurveTest is BaseTest {
             _fund(alice, amount);
             vm.startPrank(alice);
             usdg.approve(address(curve), amount);
-            try curve.buy(amount, 0) {} catch {}
+            try curve.buy(amount, 0, block.timestamp) {} catch {}
             vm.stopPrank();
 
             uint256 owed = (curve.creatorFeesAccrued() + curve.platformFeesAccrued())

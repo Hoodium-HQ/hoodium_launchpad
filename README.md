@@ -24,12 +24,17 @@ and is not built.
 ## Mechanics (short)
 
 - Quote token is **USDG** (6 decimals). Constant-product curve over virtual
-  reserves; 1B supply, 800M sold on the curve, 200M reserved for the pool.
-- 1% fee on every curve trade, 70% creator / 30% platform (`FeeVault`).
-- At the graduation target the curve closes atomically and seeds a full-range
-  Uniswap v3 pool held by `LPLocker`, which has no withdrawal path. Locked-LP
-  fees are shared 70/30 creator / protocol.
-- Anti-snipe: the first three blocks cap a buy at 1% of supply.
+  reserves derived from the allocations and target (23,000 USDG with the
+  defaults) so the pool opens at the curve's closing price; 1B supply, 800M
+  sold on the curve, 200M reserved for the pool.
+- 1% fee on every curve trade, 70% creator / 30% platform (`FeeVault`). Trades
+  carry a deadline.
+- The buy that reaches the graduation target closes the curve and seeds a
+  full-range Uniswap v3 pool in the same transaction, held by `LPLocker`, which
+  has no withdrawal path. Locked-LP fees are shared 70/30 creator / protocol;
+  anyone can sweep the protocol's share. Fees and leftovers are pull-based.
+- Anti-snipe: for the first three blocks each address may buy at most 1% of
+  supply in total.
 
 ## Status
 
