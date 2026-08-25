@@ -6,7 +6,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { env } from '@/config/env'
 import { useTokenCandles } from '@/hooks/useLaunchpad'
 import type { CandleInterval, TokenDetail } from '@/lib/launchpad-api'
-import { formatAmount, formatPrice, fromBaseUnits } from '@/lib/money'
+import { formatAmount, formatPrice, fromBaseUnits, isZero, usdToMoney } from '@/lib/money'
 import { cn } from '@/lib/utils'
 
 /**
@@ -15,10 +15,13 @@ import { cn } from '@/lib/utils'
  * The series is the candles' closes, drawn as an area. On a bonding curve
  * every trade *is* a price change, so the finest interval is the honest one;
  * the coarser buckets exist so a week reads as a shape rather than noise.
+ * `ALL` is resolved by the API, which picks the widest bucket that fits the
+ * token's whole life under its candle cap.
  *
- * Market cap is allowed to be missing: it is price x supply, and when the API
- * cannot state it the figure renders as `—` rather than falling back to the
- * amount raised, which is a different quantity entirely.
+ * Candle values are USD floats — chart coordinates, drawn and never settled
+ * against. The price figure itself comes from `curveState.price`, the exact
+ * spot price in quote base units; the last close is only the fallback for a
+ * token whose curve state has not been read yet.
  */
 const INTERVALS: Array<{ value: CandleInterval; label: string }> = [
   { value: '5m', label: '5M' },
@@ -37,13 +40,18 @@ export function TokenChartCard({ token }: { token: TokenDetail }) {
       (chart.data?.candles ?? []).map((c) => ({
         time: c.t,
         // Chart coordinate, not money: the series is drawn, never settled against.
-        value: Number(fromBaseUnits(c.c, env.quoteDecimals)),
+        value: c.c,
       })),
     [chart.data],
   )
 
   const graduated = token.status === 'graduated' || token.graduated
-  const latestPrice = token.price ?? chart.data?.candles.at(-1)?.c ?? null
+
+  // Exact spot price in quote units (USDG is $1). A fresh token with no curve
+  // read yet reports "0"; fall back to the last close, then to nothing.
+  const spot = fromBaseUnits(token.curveState.price, env.quoteDecimals)
+  const lastClose = chart.data?.candles.at(-1)?.c
+  const latestPrice = !isZero(spot) ? spot : lastClose !== undefined && lastClose > 0 ? usdToMoney(lastClose) : null
 
   const first = points[0]?.value
   const last = points.at(-1)?.value
@@ -52,23 +60,15 @@ export function TokenChartCard({ token }: { token: TokenDetail }) {
   return (
     <Card featured className="p-5">
       <dl className="grid grid-cols-2 gap-4 border-b border-border pb-4 sm:grid-cols-4">
-        <Stat label="Price">
-          {latestPrice ? formatPrice(fromBaseUnits(latestPrice, env.quoteDecimals), '$') : '—'}
-        </Stat>
-        <Stat label="Market cap">
-          {token.marketCapUsd != null ? formatAmount(token.marketCapUsd, { compact: true, prefix: '$' }) : '—'}
-        </Stat>
-        <Stat label={`Price in ${env.quoteSymbol}`}>
-          {latestPrice ? formatPrice(fromBaseUnits(latestPrice, env.quoteDecimals)) : '—'}
-        </Stat>
+        <Stat label="Price">{latestPrice ? formatPrice(latestPrice, '$') : '—'}</Stat>
+        <Stat label="Market cap">{formatAmount(usdToMoney(token.marketCapUsd), { compact: true, prefix: '$' })}</Stat>
+        <Stat label={`Price in ${env.quoteSymbol}`}>{latestPrice ? formatPrice(latestPrice) : '—'}</Stat>
         <Stat label="Market">{graduated ? 'Uniswap v3 pool' : 'Bonding curve'}</Stat>
       </dl>
 
       <div className="mt-4 flex flex-wrap items-baseline justify-between gap-3">
         <div>
-          <p className="num text-2xl font-medium">
-            {latestPrice ? formatPrice(fromBaseUnits(latestPrice, env.quoteDecimals), '$') : '—'}
-          </p>
+          <p className="num text-2xl font-medium">{latestPrice ? formatPrice(latestPrice, '$') : '—'}</p>
           {changePct !== null && (
             <p
               className={cn(
@@ -94,7 +94,7 @@ export function TokenChartCard({ token }: { token: TokenDetail }) {
           height={240}
           points={points}
           format={(v) => (v >= 1 ? v.toFixed(2) : v.toPrecision(3))}
-          ariaLabel={`Price of ${token.symbol} in ${env.quoteSymbol}, ${interval} candles`}
+          ariaLabel={`Price of ${token.symbol} in ${env.quoteSymbol}, ${chart.data?.interval ?? interval} candles`}
           emptyLabel={chart.isError ? 'Chart unavailable.' : 'No trades yet. The chart starts with the first one.'}
         />
       )}

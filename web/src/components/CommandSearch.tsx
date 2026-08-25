@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router'
 import { TokenIcon } from '@/components/TokenIcon'
 import { useTokenList } from '@/hooks/useLaunchpad'
 import { tokenImageUrl } from '@/lib/launchpad-api'
-import { formatAmount } from '@/lib/money'
+import { formatAmount, usdToMoney } from '@/lib/money'
 import { cn, isAddress, sanitizeText, truncateMiddle } from '@/lib/utils'
 import { Modal } from './Modal'
 
@@ -125,7 +125,7 @@ export function CommandSearch({ open, onClose }: { open: boolean; onClose: () =>
                     </span>
                   </span>
                   <span className="num shrink-0 text-xs text-muted-foreground">
-                    {token.marketCapUsd != null ? formatAmount(token.marketCapUsd, { compact: true, prefix: '$' }) : ''}
+                    {formatAmount(usdToMoney(token.marketCapUsd), { compact: true, prefix: '$' })}
                   </span>
                 </button>
               </li>

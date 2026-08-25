@@ -70,8 +70,16 @@ export function TokenPage() {
   const symbol = sanitizeText(t.symbol, 16) || '???'
   const description = sanitizeText(t.description, 512)
   const graduated = t.status === 'graduated' || t.graduated
-  const creatorTaxPct = (t.fees.tradeFeeBps * t.fees.creatorShareBps) / 1_000_000
   const pct = Math.min(100, Math.max(0, t.progressBps / 100))
+
+  /*
+   * The fee terms ride on `curveState` and are null when the API could not read
+   * the factory. Null is "unknown", which the page says outright — a zero here
+   * would read as a free trade, and that is a claim nobody verified.
+   */
+  const { tradeFeeBps, creatorFeeShareBps, lpProtocolFeeShareBps } = t.curveState
+  const creatorTaxPct =
+    tradeFeeBps !== null && creatorFeeShareBps !== null ? (tradeFeeBps * creatorFeeShareBps) / 1_000_000 : null
 
   return (
     <div className="space-y-5">
@@ -127,12 +135,17 @@ export function TokenPage() {
             </Fact>
             <Fact label="Creator tax">
               <span className="num">
-                {creatorTaxPct.toFixed(creatorTaxPct % 1 === 0 ? 0 : 2)}% of every curve trade
+                {creatorTaxPct !== null
+                  ? `${creatorTaxPct.toFixed(creatorTaxPct % 1 === 0 ? 0 : 2)}% of every curve trade`
+                  : 'Terms unavailable'}
               </span>
             </Fact>
             <Fact label="Supply">
               <span className="num">
-                {t.totalSupply ? formatAmount(fromBaseUnits(t.totalSupply, 18), { compact: true }) : '—'} {symbol}
+                {t.curveState.totalSupply
+                  ? formatAmount(fromBaseUnits(t.curveState.totalSupply, 18), { compact: true })
+                  : '—'}{' '}
+                {symbol}
               </span>
             </Fact>
             <Fact label="Contract">
@@ -162,12 +175,19 @@ export function TokenPage() {
             <div>
               <h2 className="text-card-title">Fee sharing</h2>
               <p className="mt-1 text-label text-muted-foreground">
-                Every curve trade pays a {t.fees.tradeFeeBps / 100}% fee, split{' '}
-                <span className="text-foreground">{t.fees.creatorShareBps / 100}% to the creator</span> and{' '}
-                {(10_000 - t.fees.creatorShareBps) / 100}% to Hoodium. After graduation the locked pool keeps
-                earning; those fees are split{' '}
-                {t.fees.lpCreatorShareBps != null
-                  ? `${t.fees.lpCreatorShareBps / 100}% creator / ${(10_000 - t.fees.lpCreatorShareBps) / 100}% protocol`
+                {tradeFeeBps !== null && creatorFeeShareBps !== null ? (
+                  <>
+                    Every curve trade pays a {tradeFeeBps / 100}% fee, split{' '}
+                    <span className="text-foreground">{creatorFeeShareBps / 100}% to the creator</span> and{' '}
+                    {(10_000 - creatorFeeShareBps) / 100}% to Hoodium.
+                  </>
+                ) : (
+                  <>Every curve trade pays a fee split between the creator and Hoodium; the factory could not be read just now, so the exact split is unavailable.</>
+                )}{' '}
+                After graduation the locked pool keeps earning; those fees are split{' '}
+                {/* The API reports the locker's cut; the creator keeps the rest. */}
+                {lpProtocolFeeShareBps !== null
+                  ? `${(10_000 - lpProtocolFeeShareBps) / 100}% creator / ${lpProtocolFeeShareBps / 100}% protocol`
                   : 'per the locker contract'}
                 . Holders earn nothing from fees — the token has no tax and no rebase.
               </p>
@@ -200,11 +220,12 @@ export function TokenPage() {
               ) : (
                 <>
                   <span className="num text-foreground">
-                    {formatAmount(fromBaseUnits(t.raised, env.quoteDecimals), { compact: true })}
+                    {formatAmount(fromBaseUnits(t.curveState.raised, env.quoteDecimals), { compact: true })}
                   </span>{' '}
                   of{' '}
                   <span className="num text-foreground">
-                    {formatAmount(fromBaseUnits(t.target, env.quoteDecimals), { compact: true })} {env.quoteSymbol}
+                    {formatAmount(fromBaseUnits(t.curveState.target, env.quoteDecimals), { compact: true })}{' '}
+                    {env.quoteSymbol}
                   </span>{' '}
                   raised. At the threshold the curve closes and liquidity moves to a Uniswap v3 pool and is
                   locked.

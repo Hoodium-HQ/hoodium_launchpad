@@ -72,8 +72,46 @@ MOCK_EMPTY=1 npm run mock-api   # an empty launchpad — every empty state
 npm run dev                 # http://localhost:5173
 ```
 
-`scripts/mock-api.mjs` serves the shapes in `src/lib/launchpad-api.ts`.
-`API_NEEDS.md` is the list of endpoints and fields the app consumes.
+`scripts/mock-api.mjs` serves the shapes in `src/lib/api-types.ts`.
+
+## The API contract
+
+`src/lib/api-types.ts` is a **verbatim copy** of `../api/src/types.ts` — the
+API is the source of truth and the web declares no response shape of its own.
+When the API's types change, copy the file over again (`cp ../api/src/types.ts
+src/lib/api-types.ts`) and let `tsc` find every consumer. `src/lib/auth.ts`
+carries the same relationship to `../api/src/auth.ts`: `buildAuthMessage` must
+stay byte-identical or every signed write is a 401.
+
+Two conventions from that file shape every call site:
+
+- exact on-chain amounts are decimal strings of base units (`Money`);
+- every `…Usd` field is a JS number for display and sorting; `usdToMoney` in
+  `src/lib/money.ts` is the one place it becomes `Money` again.
+
+Writes that need the creator's identity — editing a token's links — carry the
+EIP-191 envelope from `src/lib/auth.ts`, signed with the wallet (`useSaveLinks`).
+There are no cookies or sessions; requests are sent without credentials, which
+is also what the API's CORS reply allows.
+
+### API gaps
+
+What the app would show if the API served it. None of these blocks a release.
+
+- **Pool trades after graduation.** Only bonding-curve trades are indexed, so a
+  graduated token's trade list, price, market cap and chart stop at the curve's
+  close. Every trade row is therefore labelled "Bonding curve".
+- **Holder balances** are reconstructed from curve trades (`basis:
+  'curve_trades'`); an ERC-20 transfer is invisible, which the holders tab says.
+- **Fee terms** on a token page come from `curveState`, which is `null`-valued
+  when the factory cannot be read. The page then says "terms unavailable"
+  rather than guessing.
+- **Website links**: the API stores and serves `website`, but the app renders
+  only the `x` and `telegram` handles and never sends a website when saving
+  links (the API normalises URLs before hashing them into the signed payload,
+  which the client cannot reproduce byte-for-byte).
+- **Closed positions** (`profile.closed`) and the profile `totals` beyond
+  `tradeCount` are served but not yet rendered.
 
 ## Deploy — Render static site
 
@@ -92,7 +130,7 @@ already point at the production origin.
 - No analytics, no third-party scripts, no font or image host other than our
   own — a page where people sign transactions is a supply-chain surface.
 - No token chat, no SIWE sessions, no ENS: dropped with the split from
-  hoodium.app. Edit-links and metadata pinning still send cookies, so an API
-  that gates them needs its own session flow (see `API_NEEDS.md`).
+  hoodium.app. Edit-links is a per-request wallet signature; metadata pinning
+  is unauthenticated and rate-limited on the API.
 - Nothing is promoted. Every ordering is a plain sort on a measured column and
   there is no field anywhere to boost a token.

@@ -32,6 +32,12 @@ function terms(overrides: Partial<LaunchTerms> = {}): LaunchTerms {
 
   return {
     factoryAddress: '0xfactory',
+    usdgAddress: '0xusdg',
+    feeVault: '0xvault',
+    graduationManager: '0xmanager',
+    locker: null,
+    positionManager: null,
+    protocolFeeShareBps: null,
     totalSupply: totalSupply.toString(),
     curveAllocation: curveAllocation.toString(),
     lpAllocation: (totalSupply - curveAllocation).toString(),

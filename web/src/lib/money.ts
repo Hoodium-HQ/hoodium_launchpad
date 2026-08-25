@@ -147,6 +147,20 @@ function shiftLeft({ neg, int, frac }: Decomposed, n: number): Decomposed {
   return { neg, int: digits.slice(0, pointAt), frac: digits.slice(pointAt) }
 }
 
+/**
+ * A `…Usd` figure from the API, which arrives as a JS number — the one place
+ * money legitimately crosses the wire as a float. The API states that these are
+ * "for display and sorting only", and this is the boundary where they become
+ * `Money` again so every formatter downstream stays exact.
+ *
+ * `toLocaleString` rather than `String()`: a price like `3.8e-14` or a market
+ * cap above 1e21 stringifies in exponent form, which `decompose` rightly refuses.
+ */
+export function usdToMoney(value: number): string {
+  if (!Number.isFinite(value)) return '0'
+  return value.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 20 })
+}
+
 export function formatPercent(value: Money, dp = 1): string {
   return `${round(value, dp)}%`
 }

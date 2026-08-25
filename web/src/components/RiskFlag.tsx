@@ -1,5 +1,5 @@
 import { TriangleAlert } from 'lucide-react'
-import type { TokenDetail } from '@/lib/launchpad-api'
+import type { TokenListItem } from '@/lib/launchpad-api'
 import { formatPercent } from '@/lib/money'
 import { cn } from '@/lib/utils'
 
@@ -30,7 +30,10 @@ const COPY: Record<string, { label: string; explain: string }> = {
   },
 }
 
-export function RiskFlags({ token, className }: { token: TokenDetail; className?: string }) {
+/** Every list item carries `risk`, so both forms accept the narrower shape. */
+type Flagged = Pick<TokenListItem, 'risk'>
+
+export function RiskFlags({ token, className }: { token: Flagged; className?: string }) {
   const flags = token.risk?.flags ?? []
   if (flags.length === 0) return null
 
@@ -47,9 +50,10 @@ export function RiskFlags({ token, className }: { token: TokenDetail; className?
           return (
             <li key={flag} className="text-xs">
               <span className="font-medium text-foreground">{copy.label}</span>
-              {/* `Money` is `string | bigint`, and a bare `&&` on it can yield
-                  `0n`, which React refuses to render. Coerce to boolean. */}
-              {flag === 'creator_concentration' && token.risk.creatorSharePct != null ? (
+              {/* `creatorSharePct` is a percent as a decimal string ("12.5"), which
+                  `formatPercent` takes as-is. Guard the empty string, not null —
+                  the API always sends one. */}
+              {flag === 'creator_concentration' && token.risk.creatorSharePct ? (
                 <span className="num text-warning"> — {formatPercent(token.risk.creatorSharePct, 1)}</span>
               ) : null}
               <span className="block text-muted-foreground">{copy.explain}</span>
@@ -62,7 +66,7 @@ export function RiskFlags({ token, className }: { token: TokenDetail; className?
 }
 
 /** Compact form for the discovery grid, where space is tight. */
-export function RiskBadge({ token }: { token: TokenDetail }) {
+export function RiskBadge({ token }: { token: Flagged }) {
   const count = token.risk?.flags?.length ?? 0
   if (count === 0) return null
 

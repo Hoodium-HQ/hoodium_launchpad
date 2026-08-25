@@ -1,4 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useAccount, useSignMessage } from 'wagmi'
+import { env } from '@/config/env'
+import { buildAuthMessage, linksPayloadDigest } from '@/lib/auth'
 import {
   ApiUnreachableError,
   launchpadApi,
@@ -96,10 +99,49 @@ export function useProfile(address?: string) {
   })
 }
 
+/** Buys, sells and launches, newest first — a separate call from the profile itself. */
+export function useProfileActivity(address?: string) {
+  return useQuery({
+    queryKey: ['profile-activity', address?.toLowerCase()],
+    queryFn: () => launchpadApi.profileActivity(address!),
+    enabled: Boolean(address),
+    refetchInterval: 30_000,
+  })
+}
+
+/**
+ * Creator link edits are a signed write. The wallet signs the envelope from
+ * `@/lib/auth` — action, chain, token, signer, timestamp and a digest of the
+ * links — and the API verifies it against the token's recorded creator. There
+ * is no session to keep: each save is its own signature, good for five minutes.
+ *
+ * `website` is sent as `null` and hashed as `null`. The API normalises a website
+ * URL before hashing it, and this app cannot reproduce that normalisation
+ * byte-for-byte; the dialog does not offer the field, so nothing is lost.
+ */
 export function useSaveLinks(address: string) {
   const client = useQueryClient()
+  const { address: account } = useAccount()
+  const { signMessageAsync } = useSignMessage()
+
   return useMutation({
-    mutationFn: (links: { x: string | null; telegram: string | null }) => launchpadApi.saveLinks(address, links),
+    mutationFn: async (links: { x: string | null; telegram: string | null }) => {
+      if (!account) throw new Error('Connect the creator wallet to edit links.')
+
+      const payload = { x: links.x, telegram: links.telegram, website: null }
+      const issuedAt = Date.now()
+      const message = buildAuthMessage({
+        action: 'links',
+        chainId: env.chainId,
+        address: account,
+        token: address,
+        issuedAt,
+        payload: linksPayloadDigest(payload),
+      })
+      const signature = await signMessageAsync({ message })
+
+      return launchpadApi.saveLinks(address, { address: account.toLowerCase(), issuedAt, signature, ...payload })
+    },
     onSuccess: () => client.invalidateQueries({ queryKey: ['token', address.toLowerCase()] }),
   })
 }

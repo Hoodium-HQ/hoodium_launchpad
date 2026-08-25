@@ -13,10 +13,15 @@ import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { env } from '@/config/env'
 import { useCreatorFees } from '@/hooks/useCreatorFees'
-import { useProfile } from '@/hooks/useLaunchpad'
+import { useProfile, useProfileActivity } from '@/hooks/useLaunchpad'
 import { useNow } from '@/hooks/useNow'
-import { tokenImageUrl, type ActivityEntry, type Holding, type TokenSummary } from '@/lib/launchpad-api'
-import { formatAmount, fromBaseUnits, isNegative, type Money } from '@/lib/money'
+import {
+  tokenImageUrl,
+  type ProfileActivityEntry,
+  type ProfileHolding,
+  type ProfileLaunch,
+} from '@/lib/launchpad-api'
+import { formatAmount, fromBaseUnits, isNegative, usdToMoney } from '@/lib/money'
 import { cn, isAddress, relativeTime, sanitizeText, truncateMiddle } from '@/lib/utils'
 
 /**
@@ -30,6 +35,10 @@ import { cn, isAddress, relativeTime, sanitizeText, truncateMiddle } from '@/lib
  * PnL is sometimes missing on purpose. Cost basis is reconstructed from
  * trades; a plain ERC-20 `transfer` moves balance without one, so the API
  * withholds the figure when the two disagree. A withheld number is the answer.
+ *
+ * The profile and its activity are two calls: the profile reconciles every
+ * open position against the chain and is the slower of the two, so the
+ * activity tab does not wait on it.
  */
 const TABS = [
   { value: 'holdings' as const, label: 'Holdings' },
@@ -49,7 +58,9 @@ export function Profile() {
   const [tab, setTab] = useState<'holdings' | 'launches' | 'activity'>('holdings')
   const [copied, setCopied] = useState(false)
 
-  const profile = useProfile(isAddress(address) ? address : undefined)
+  const valid = isAddress(address) ? address : undefined
+  const profile = useProfile(valid)
+  const activity = useProfileActivity(valid)
   const fees = useCreatorFees()
 
   const share = async () => {
@@ -89,7 +100,7 @@ export function Profile() {
 
   const holdings = profile.data?.holdings ?? []
   const launches = profile.data?.launches ?? []
-  const activity = profile.data?.activity ?? []
+  const entries = activity.data?.entries ?? []
 
   return (
     <div className="space-y-5">
@@ -123,7 +134,7 @@ export function Profile() {
             {launches.length}
           </Stat>
           <Stat label="Trades" loading={profile.isLoading}>
-            {activity.filter((a) => a.kind !== 'launch').length}
+            {profile.data?.totals.tradeCount ?? 0}
           </Stat>
         </dl>
 
@@ -178,14 +189,18 @@ export function Profile() {
         <SegmentedControl segments={TABS} value={tab} onChange={setTab} label="Profile section" />
 
         <div className="mt-4">
-          {profile.isLoading ? (
+          {tab === 'activity' ? (
+            activity.isLoading ? (
+              <Skeleton className="h-40 w-full" />
+            ) : (
+              <ActivityList entries={entries} now={now} />
+            )
+          ) : profile.isLoading ? (
             <Skeleton className="h-40 w-full" />
           ) : tab === 'holdings' ? (
             <HoldingList holdings={holdings} now={now} />
-          ) : tab === 'launches' ? (
-            <LaunchList launches={launches} now={now} />
           ) : (
-            <ActivityList entries={activity} now={now} />
+            <LaunchList launches={launches} now={now} />
           )}
         </div>
       </Card>
@@ -202,7 +217,7 @@ function Stat({ label, loading, children }: { label: string; loading: boolean; c
   )
 }
 
-function HoldingList({ holdings, now }: { holdings: Holding[]; now: number }) {
+function HoldingList({ holdings, now }: { holdings: ProfileHolding[]; now: number }) {
   if (holdings.length === 0) {
     return <p className="py-10 text-center text-sm text-muted-foreground">No launchpad tokens held by this address.</p>
   }
@@ -211,11 +226,11 @@ function HoldingList({ holdings, now }: { holdings: Holding[]; now: number }) {
     <>
       <ul className="space-y-2">
         {holdings.map((h) => {
-          const name = sanitizeText(h.token.name, 40) || 'Unnamed'
+          const name = sanitizeText(h.name, 40) || 'Unnamed'
           return (
-            <li key={h.token.address}>
+            <li key={h.address}>
               <Link
-                to={`/t/${h.token.address}`}
+                to={`/t/${h.address}`}
                 className={cn(
                   'flex flex-wrap items-center gap-4 rounded-xl border border-border p-3',
                   'transition-colors duration-[120ms] hover:border-primary/30',
@@ -224,28 +239,24 @@ function HoldingList({ holdings, now }: { holdings: Holding[]; now: number }) {
               >
                 <div className="flex min-w-[10rem] flex-1 items-center gap-2.5">
                   <TokenAvatar
-                    tokenAddress={h.token.address}
+                    tokenAddress={h.address}
                     name={name}
-                    src={tokenImageUrl(h.token)}
+                    src={tokenImageUrl(h)}
                     className="size-9 shrink-0 text-xs"
                     rounded="rounded-lg"
                   />
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium">{name}</p>
                     <p className="num truncate text-label text-muted-foreground">
-                      ${sanitizeText(h.token.symbol, 12) || '???'}
-                      {h.token.lastTradeAt ? ` · ${relativeTime(h.token.lastTradeAt, now)}` : ''}
+                      ${sanitizeText(h.symbol, 12) || '???'}
+                      {h.lastTradeAt ? ` · ${relativeTime(h.lastTradeAt, now)}` : ''}
                     </p>
                   </div>
                 </div>
 
                 <Column label="Balance">{formatAmount(fromBaseUnits(h.balance, 18), { compact: true })}</Column>
-                <Column label="Value">
-                  {h.valueQuote != null
-                    ? formatAmount(fromBaseUnits(h.valueQuote, env.quoteDecimals), { dp: 2, prefix: '$' })
-                    : '—'}
-                </Column>
-                <PnlColumn value={h.pnlQuote} />
+                <Column label="Value">{formatAmount(usdToMoney(h.valueUsd), { dp: 2, prefix: '$' })}</Column>
+                <PnlColumn value={h.unrealizedPnlUsd} />
               </Link>
             </li>
           )
@@ -259,7 +270,8 @@ function HoldingList({ holdings, now }: { holdings: Holding[]; now: number }) {
   )
 }
 
-function PnlColumn({ value }: { value: Money | null }) {
+/** Unrealised PnL in USD (USDG at $1); null is withheld, not zero. */
+function PnlColumn({ value }: { value: number | null }) {
   if (value === null) {
     return (
       <div className="min-w-[6rem] text-right">
@@ -268,14 +280,14 @@ function PnlColumn({ value }: { value: Money | null }) {
       </div>
     )
   }
-  const negative = isNegative(value)
-  const magnitude = value.toString().replace('-', '')
+  const pnl = usdToMoney(value)
+  const negative = isNegative(pnl)
+  const magnitude = pnl.replace('-', '')
   return (
     <div className="min-w-[6rem] text-right">
       <p className="text-label text-muted-foreground">PnL</p>
       <p className={cn('num text-sm font-medium', negative ? 'text-down' : 'text-up')}>
-        {negative ? '▼' : '▲'}{' '}
-        {formatAmount(fromBaseUnits(magnitude, env.quoteDecimals), { dp: 2, prefix: '$' })}
+        {negative ? '▼' : '▲'} {formatAmount(magnitude, { dp: 2, prefix: '$' })}
       </p>
     </div>
   )
@@ -290,7 +302,7 @@ function Column({ label, children }: { label: string; children: React.ReactNode 
   )
 }
 
-function LaunchList({ launches, now }: { launches: TokenSummary[]; now: number }) {
+function LaunchList({ launches, now }: { launches: ProfileLaunch[]; now: number }) {
   if (launches.length === 0) {
     return <p className="py-10 text-center text-sm text-muted-foreground">This address has launched nothing.</p>
   }
@@ -303,7 +315,7 @@ function LaunchList({ launches, now }: { launches: TokenSummary[]; now: number }
   )
 }
 
-function ActivityList({ entries, now }: { entries: ActivityEntry[]; now: number }) {
+function ActivityList({ entries, now }: { entries: ProfileActivityEntry[]; now: number }) {
   if (entries.length === 0) {
     return <p className="py-10 text-center text-sm text-muted-foreground">No launchpad activity yet.</p>
   }
@@ -311,7 +323,10 @@ function ActivityList({ entries, now }: { entries: ActivityEntry[]; now: number 
   return (
     <ul className="divide-y divide-border">
       {entries.map((entry, index) => (
-        <li key={`${entry.txHash ?? entry.token.address}-${index}`} className="flex items-center gap-3 py-2.5 text-sm">
+        <li
+          key={`${entry.txHash ?? entry.address}-${index}`}
+          className={cn('flex items-center gap-3 py-2.5 text-sm', !entry.finalized && 'opacity-60')}
+        >
           <span
             className={cn(
               'num w-16 shrink-0 text-xs',
@@ -321,15 +336,15 @@ function ActivityList({ entries, now }: { entries: ActivityEntry[]; now: number 
             {entry.kind === 'buy' ? '↑ Buy' : entry.kind === 'sell' ? '↓ Sell' : '★ Launch'}
           </span>
 
-          <Link to={`/t/${entry.token.address}`} className="min-w-0 flex-1 truncate hover:underline">
-            {sanitizeText(entry.token.name, 40) || truncateMiddle(entry.token.address)}
-            <span className="num ml-1.5 text-xs text-muted-foreground">${sanitizeText(entry.token.symbol, 12)}</span>
+          <Link to={`/t/${entry.address}`} className="min-w-0 flex-1 truncate hover:underline">
+            {sanitizeText(entry.name, 40) || truncateMiddle(entry.address)}
+            <span className="num ml-1.5 text-xs text-muted-foreground">${sanitizeText(entry.symbol, 12)}</span>
           </Link>
 
           <span className="num shrink-0 text-xs">
             {entry.kind === 'launch'
               ? '—'
-              : formatAmount(fromBaseUnits(entry.quoteAmount, env.quoteDecimals), { dp: 4, prefix: '$' })}
+              : formatAmount(fromBaseUnits(entry.usdgAmount, env.quoteDecimals), { dp: 4, prefix: '$' })}
           </span>
 
           <span className="num w-16 shrink-0 text-right text-xs text-muted-foreground">

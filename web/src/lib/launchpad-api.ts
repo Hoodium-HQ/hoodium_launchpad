@@ -2,234 +2,47 @@
  * Launchpad read API. Rankings, history and aggregates only — anything that
  * moves money goes browser → chain, never through here.
  *
- * The two writes (pinning metadata, editing a token's links) touch no balance,
- * and a launch still fails closed if the browser cannot reach us — the creator
- * pastes an IPFS URI instead.
+ * The three writes (pinning metadata, editing a token's links, token chat —
+ * unused here) touch no balance, and a launch still fails closed if the
+ * browser cannot reach us — the creator pastes an IPFS URI instead.
  *
- * Every monetary field is a `Money` (decimal string of base units), never a
- * `number`. `*Usd` fields are already in whole USD and may carry decimals.
+ * ── The contract ─────────────────────────────────────────────────────────────
+ * `./api-types.ts` is a verbatim copy of `../api/src/types.ts` and is the only
+ * description of the wire shapes in this app. Nothing below re-declares a
+ * response type; it re-exports them so a consumer never imports a copy that
+ * could drift. Two conventions from that file matter at every call site:
  *
- * The shapes below are the contract with `../api`; `API_NEEDS.md` lists what
- * this client consumes beyond the endpoints that were specified up front.
+ *   - exact on-chain amounts are decimal strings of base units (`Money`);
+ *   - every `…Usd` field is a JS *number*, for display and sorting only —
+ *     `usdToMoney` in `./money` is where it becomes `Money` again.
+ *
+ * Writes that need a signature carry the envelope from `./auth`; the API has
+ * no cookies or sessions, so requests are sent without credentials.
  */
 import { env } from '@/config/env'
-import type { Money } from './money'
+import type {
+  CandleInterval,
+  CandlesResponse,
+  ConfigResponse,
+  HealthResponse,
+  HoldersResponse,
+  PinMetadataRequest,
+  PinMetadataResponse,
+  PriceSeriesResponse,
+  ProfileActivityResponse,
+  ProfileResponse,
+  TokenDetail,
+  TokenDetailResponse,
+  TokenListItem,
+  TokenListResponse,
+  TokenListSort,
+  TokenListStatus,
+  TradesResponse,
+  UpdateLinksRequest,
+  VolumeWindow,
+} from './api-types'
 
-// ── Tokens ──────────────────────────────────────────────────────────────────
-
-export type TokenStatus = 'live' | 'graduated'
-export type TokenSort = 'recent_buys' | 'newest' | 'oldest' | 'market_cap' | 'volume'
-export type TokenWindow = 'all' | '24h' | '7d'
-
-/** One card in the explore grid — `GET /api/tokens`. */
-export interface TokenSummary {
-  address: string
-  /** Creator-supplied and attacker-controlled. Sanitise at render. */
-  name: string
-  symbol: string
-  /** Absolute or API-relative image URL, or null when the token has no artwork. */
-  image: string | null
-  creator: string
-  createdAt: string
-  marketCapUsd: Money | null
-  fdvUsd: Money | null
-  /** Basis points, 0–10 000. */
-  progressBps: number
-  /** Quote base units, over the requested window. */
-  volume: Money | null
-  lastTradeAt: string | null
-  graduated: boolean
-  /** Uniswap v3 pool once graduated, else null. */
-  pool: string | null
-}
-
-export interface TokenList {
-  items: TokenSummary[]
-  total: number
-  page: number
-  limit: number
-  counts: { graduated: number; launched: number }
-}
-
-/** The token page — `GET /api/tokens/:address`. */
-export interface TokenDetail extends TokenSummary {
-  curve: string
-  description: string | null
-  /** Handles only — the `x.com/` and `t.me/` prefixes are added at render. */
-  x: string | null
-  telegram: string | null
-  metadataURI: string | null
-  status: TokenStatus
-  /** Quote base units raised on the curve so far. */
-  raised: Money
-  /** Quote base units at which the curve closes. */
-  target: Money
-  /** Quote base units per whole token, current. */
-  price: Money | null
-  /** Whole token supply in base units (18 decimals). */
-  totalSupply: Money | null
-  /** Curve trades, all-time, in quote base units. */
-  volumeAll: Money | null
-  volume24h: Money | null
-  tradeCount: number
-  holderCount: number
-  fees: {
-    /** Per-trade fee on the curve. */
-    tradeFeeBps: number
-    /** Creator's share of that fee; the rest goes to the platform vault. */
-    creatorShareBps: number
-    /** Creator's share of the locked pool's fees after graduation. */
-    lpCreatorShareBps: number | null
-  }
-  /** The locked LP position backing the pool. A uint256 as a string. */
-  lpTokenId: string | null
-  graduatedAt: string | null
-  risk: TokenRisk
-}
-
-export interface TokenRisk {
-  creatorSharePct: Money | null
-  priorLaunches: number
-  priorGraduations: number
-  hasConfusableSymbol: boolean
-  flags: RiskFlag[]
-}
-
-export type RiskFlag = 'creator_concentration' | 'creator_no_prior_graduations' | 'confusable_symbol'
-
-// ── Trades, holders, candles ────────────────────────────────────────────────
-
-export interface Trade {
-  side: 'buy' | 'sell'
-  trader: string
-  /** Quote base units. */
-  quoteAmount: Money
-  /** Token base units. */
-  tokenAmount: Money
-  /** Quote base units per whole token at this trade. */
-  price: Money | null
-  venue: 'curve' | 'pool'
-  txHash: string
-  blockNumber: number
-  at: string
-  /** Unconfirmed rows render at reduced opacity. */
-  finalized: boolean
-}
-
-export interface Holder {
-  address: string
-  balance: Money
-  /** Percent of circulating supply, two decimals. */
-  sharePct: string | null
-  isCreator: boolean
-}
-
-export interface Paged<T> {
-  items: T[]
-  total: number
-  page: number
-  limit: number
-}
-
-export type CandleInterval = '5m' | '1h' | '6h' | '1d' | 'all'
-
-export interface Candle {
-  /** Unix seconds, bucket start. */
-  t: number
-  /** Quote base units per whole token. */
-  o: Money
-  h: Money
-  l: Money
-  c: Money
-  /** Quote base units traded in the bucket. */
-  v: Money
-}
-
-export interface CandleSeries {
-  interval: CandleInterval
-  candles: Candle[]
-}
-
-// ── Profile ─────────────────────────────────────────────────────────────────
-
-export interface Holding {
-  token: TokenSummary
-  balance: Money
-  /** Quote base units. */
-  valueQuote: Money | null
-  costBasisQuote: Money | null
-  /** Null when the position does not reconcile with the live wallet balance. */
-  pnlQuote: Money | null
-}
-
-export interface ClaimableFee {
-  token: TokenSummary
-  curve: string
-  /** Quote base units the creator can claim right now. */
-  amount: Money
-}
-
-export interface ActivityEntry {
-  kind: 'buy' | 'sell' | 'launch'
-  token: TokenSummary
-  quoteAmount: Money
-  tokenAmount: Money
-  txHash: string | null
-  at: string | null
-}
-
-export interface Profile {
-  address: string
-  holdings: Holding[]
-  launches: TokenSummary[]
-  claimable: ClaimableFee[]
-  activity: ActivityEntry[]
-}
-
-// ── Launch terms ────────────────────────────────────────────────────────────
-
-/**
- * Launch terms, read from the factory itself.
- *
- * Null on the config object means the factory could not be read. The launch
- * form renders that as a refusal rather than filling in plausible numbers.
- */
-export interface LaunchTerms {
-  factoryAddress: string
-  totalSupply: string
-  curveAllocation: string
-  lpAllocation: string
-  tokenDecimals: number
-  virtualUsdg: string
-  virtualTokens: string
-  creationFee: string
-  graduationTarget: string
-  graduationFee: string
-  devBuyCapTokens: string
-  devBuyMaxBps: number
-  tradeFeeBps: number
-  creatorFeeShareBps: number
-  snipeBlocks: number
-  snipeMaxBps: number
-}
-
-export interface LaunchpadConfig {
-  factoryAddress: string | null
-  quoteSymbol: string
-  quoteAddress: string
-  quoteDecimals: number
-  chainId: number
-  /** False means the upload path is off and the form asks for a URI instead. */
-  pinningEnabled: boolean
-  terms: LaunchTerms | null
-}
-
-export interface Health {
-  status: string
-  chainId: number
-  /** Last block the indexer has processed, for the "indexing behind" note. */
-  indexedBlock?: number
-}
+export type * from './api-types'
 
 // ── Transport ───────────────────────────────────────────────────────────────
 
@@ -253,17 +66,37 @@ export class ApiUnreachableError extends Error {
   }
 }
 
+/**
+ * Error bodies are `{ error, code? }`. A handful of codes deserve a sentence
+ * the creator can act on rather than the server's terse one.
+ */
+const MESSAGES: Record<string, string> = {
+  pinning_unavailable:
+    'Metadata pinning is not configured on this deployment. Paste an IPFS URI you pinned yourself instead.',
+  expired: 'That signature has expired — sign again.',
+  bad_signature: 'The signature did not match the connected wallet.',
+  forbidden: 'Only the creator wallet can edit these links.',
+  not_a_holder: 'Only token holders can post here.',
+}
+
+async function throwFor(path: string, response: Response, payload: { error?: unknown; code?: unknown } | null): Promise<never> {
+  const code = typeof payload?.code === 'string' ? payload.code : null
+  const message =
+    (code && MESSAGES[code]) ??
+    (typeof payload?.error === 'string' ? payload.error : `${path} failed with ${response.status}`)
+  throw new ApiError(response.status, code, message)
+}
+
 async function get<T>(path: string): Promise<T> {
   let response: Response
   try {
-    response = await fetch(`${env.apiUrl}${path}`, { credentials: 'include' })
+    response = await fetch(`${env.apiUrl}${path}`)
   } catch (cause) {
     throw new ApiUnreachableError(cause)
   }
   if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as { error?: unknown; code?: string } | null
-    const message = typeof payload?.error === 'string' ? payload.error : `${path} failed with ${response.status}`
-    throw new ApiError(response.status, payload?.code ?? null, message)
+    const payload = (await response.json().catch(() => null)) as { error?: unknown; code?: unknown } | null
+    return throwFor(path, response, payload)
   }
   return (await response.json()) as T
 }
@@ -273,7 +106,6 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   try {
     response = await fetch(`${env.apiUrl}${path}`, {
       method: 'POST',
-      credentials: 'include',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     })
@@ -282,14 +114,10 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   }
 
   const payload = (await response.json().catch(() => null)) as
-    | (Record<string, unknown> & { error?: unknown; code?: string })
+    | (Record<string, unknown> & { error?: unknown; code?: unknown })
     | null
 
-  if (!response.ok) {
-    const message = typeof payload?.error === 'string' ? payload.error : `request failed with ${response.status}`
-    throw new ApiError(response.status, payload?.code ?? null, message)
-  }
-
+  if (!response.ok) return throwFor(path, response, payload)
   return payload as T
 }
 
@@ -307,7 +135,7 @@ function query(params: Record<string, string | number | undefined>): string {
  * An API-relative `image` field is resolved against the API origin; an absolute
  * one is trusted only if it is already on that origin.
  */
-export function tokenImageUrl(token: Pick<TokenSummary, 'address' | 'image'>): string | null {
+export function tokenImageUrl(token: Pick<TokenListItem, 'address' | 'image'>): string | null {
   if (!token.image) return null
   if (token.image.startsWith('/')) return `${env.apiUrl}${token.image}`
   if (token.image.startsWith(env.apiUrl)) return token.image
@@ -315,42 +143,56 @@ export function tokenImageUrl(token: Pick<TokenSummary, 'address' | 'image'>): s
 }
 
 export interface TokenListParams {
-  status?: TokenStatus
-  sort?: TokenSort
-  window?: TokenWindow
+  status?: TokenListStatus
+  sort?: TokenListSort
+  window?: VolumeWindow
   page?: number
   limit?: number
   q?: string
+  creator?: string
+}
+
+/** What `POST /api/tokens/:address/links` answers with — the overlay as stored. */
+export interface LinksResponse {
+  x: string | null
+  telegram: string | null
+  website: string | null
 }
 
 export const launchpadApi = {
-  health: () => get<Health>('/health'),
-  config: () => get<LaunchpadConfig>('/api/config'),
+  health: () => get<HealthResponse>('/health'),
+  config: () => get<ConfigResponse>('/api/config'),
 
-  tokens: (params: TokenListParams) => get<TokenList>(`/api/tokens${query({ ...params })}`),
+  tokens: (params: TokenListParams) => get<TokenListResponse>(`/api/tokens${query({ ...params })}`),
 
-  token: (address: string) => get<TokenDetail>(`/api/tokens/${address}`),
+  token: async (address: string): Promise<TokenDetail> =>
+    (await get<TokenDetailResponse>(`/api/tokens/${address}`)).token,
 
   trades: (address: string, page = 1, limit = 25) =>
-    get<Paged<Trade>>(`/api/tokens/${address}/trades${query({ page, limit })}`),
+    get<TradesResponse>(`/api/tokens/${address}/trades${query({ page, limit })}`),
 
   holders: (address: string, page = 1, limit = 25) =>
-    get<Paged<Holder>>(`/api/tokens/${address}/holders${query({ page, limit })}`),
+    get<HoldersResponse>(`/api/tokens/${address}/holders${query({ page, limit })}`),
 
+  /**
+   * `interval=all` is resolved server-side: the API picks the widest bucket that
+   * keeps the whole life of the token under its candle cap and reports the
+   * interval it chose in the response.
+   */
   candles: (address: string, interval: CandleInterval) =>
-    get<CandleSeries>(`/api/tokens/${address}/candles${query({ interval })}`),
+    get<CandlesResponse>(`/api/tokens/${address}/candles${query({ interval })}`),
 
-  profile: (address: string) => get<Profile>(`/api/profile/${address}`),
+  priceSeries: (address: string, window: PriceSeriesResponse['window']) =>
+    get<PriceSeriesResponse>(`/api/tokens/${address}/price-series${query({ window })}`),
 
-  saveLinks: (address: string, links: { x: string | null; telegram: string | null }) =>
-    post<{ x: string | null; telegram: string | null }>(`/api/tokens/${address}/links`, links),
+  profile: (address: string) => get<ProfileResponse>(`/api/profile/${address}`),
 
-  pinMetadata: (input: {
-    name: string
-    symbol: string
-    description?: string
-    x?: string | null
-    telegram?: string | null
-    image?: { contentType: string; data: string }
-  }) => post<{ uri: string; imageUri: string | null }>('/api/metadata', input),
+  profileActivity: (address: string, limit = 100) =>
+    get<ProfileActivityResponse>(`/api/profile/${address}/activity${query({ limit })}`),
+
+  /** The caller signs; see `useSaveLinks`. */
+  saveLinks: (address: string, body: UpdateLinksRequest) =>
+    post<LinksResponse>(`/api/tokens/${address}/links`, body),
+
+  pinMetadata: (input: PinMetadataRequest) => post<PinMetadataResponse>('/api/metadata', input),
 }

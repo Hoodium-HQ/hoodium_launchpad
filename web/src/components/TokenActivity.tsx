@@ -8,16 +8,19 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { env } from '@/config/env'
 import { useTokenHolders, useTokenTrades } from '@/hooks/useLaunchpad'
 import { useNow } from '@/hooks/useNow'
-import type { Holder, TokenDetail, Trade } from '@/lib/launchpad-api'
+import type { HolderItem, TokenDetail, TradeItem } from '@/lib/launchpad-api'
 import { formatAmount, fromBaseUnits } from '@/lib/money'
 import { cn, relativeTime, sanitizeText } from '@/lib/utils'
 
 /**
  * Trades and holders, paged.
  *
- * Holder balances are reconstructed from indexed trades, so a plain ERC-20
- * `transfer` is invisible to them. Said in the footnote rather than a tooltip,
- * because a holder list that quietly omits transfers reads as authoritative.
+ * Only curve trades are indexed — the API does not follow a token into its
+ * Uniswap pool — so every row here is a bonding-curve trade and the venue
+ * column says so. Holder balances are reconstructed from those same trades,
+ * so a plain ERC-20 `transfer` is invisible to them. Said in the footnote
+ * rather than a tooltip, because a holder list that quietly omits transfers
+ * reads as authoritative.
  */
 const TABS = [
   { value: 'trades' as const, label: 'Recent trades' },
@@ -70,8 +73,8 @@ export function TokenActivity({ token }: { token: TokenDetail }) {
 
         {tab === 'holders' && (holders.data?.items.length ?? 0) > 0 && (
           <p className="mt-3 text-label text-muted-foreground">
-            Balances are reconstructed from indexed trades. Direct transfers between wallets are not indexed, so
-            a holder's real balance can differ.
+            Balances are reconstructed from indexed curve trades and shares are of the tokens sold so far.
+            Direct transfers between wallets are not indexed, so a holder's real balance can differ.
           </p>
         )}
       </CardContent>
@@ -79,7 +82,7 @@ export function TokenActivity({ token }: { token: TokenDetail }) {
   )
 }
 
-function TradeRows({ trades, symbol, now }: { trades: Trade[]; symbol: string; now: number }) {
+function TradeRows({ trades, symbol, now }: { trades: TradeItem[]; symbol: string; now: number }) {
   if (trades.length === 0) return <Empty>No trades yet.</Empty>
 
   return (
@@ -98,7 +101,7 @@ function TradeRows({ trades, symbol, now }: { trades: Trade[]; symbol: string; n
         <tbody className="divide-y divide-border">
           {trades.map((trade) => (
             <tr
-              key={`${trade.txHash}-${trade.blockNumber}`}
+              key={`${trade.txHash}-${trade.logIndex}`}
               // Unconfirmed rows render at reduced opacity. A row that silently
               // vanished after a reorg would read as a bug.
               className={cn('animate-fade-in', !trade.finalized && 'opacity-60')}
@@ -122,9 +125,9 @@ function TradeRows({ trades, symbol, now }: { trades: Trade[]; symbol: string; n
                 <Address value={trade.trader} to={`/profile/${trade.trader}`} label="trader address" />
               </td>
               <td className="num py-1.5 text-right">
-                {formatAmount(fromBaseUnits(trade.quoteAmount, env.quoteDecimals), { dp: 4 })}
+                {formatAmount(fromBaseUnits(trade.usdgAmount, env.quoteDecimals), { dp: 4 })}
               </td>
-              <td className="py-1.5 text-muted-foreground">{trade.venue === 'pool' ? 'Uniswap v3' : 'Curve'}</td>
+              <td className="py-1.5 text-muted-foreground">Bonding curve</td>
               <td className="num py-1.5 text-right text-muted-foreground">
                 {trade.finalized ? relativeTime(trade.at, now) : 'pending'}
               </td>
@@ -136,7 +139,7 @@ function TradeRows({ trades, symbol, now }: { trades: Trade[]; symbol: string; n
   )
 }
 
-function HolderRows({ holders, symbol }: { holders: Holder[]; symbol: string }) {
+function HolderRows({ holders, symbol }: { holders: HolderItem[]; symbol: string }) {
   if (holders.length === 0) return <Empty>No holders yet.</Empty>
 
   return (
@@ -151,19 +154,25 @@ function HolderRows({ holders, symbol }: { holders: Holder[]; symbol: string }) 
         </thead>
         <tbody className="divide-y divide-border">
           {holders.map((holder) => (
-            <tr key={holder.address} className="animate-fade-in">
+            <tr key={holder.holder} className="animate-fade-in">
               <td className="py-1.5">
                 <span className="inline-flex items-center gap-1.5">
-                  <Address value={holder.address} to={`/profile/${holder.address}`} label="holder address" />
+                  <Address value={holder.holder} to={`/profile/${holder.holder}`} label="holder address" />
                   {holder.isCreator && (
                     <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary">creator</span>
+                  )}
+                  {holder.isCurve && (
+                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">curve</span>
                   )}
                 </span>
               </td>
               <td className="num py-1.5 text-right">
                 {formatAmount(fromBaseUnits(holder.balance, 18), { compact: true })}
               </td>
-              <td className="num py-1.5 text-right">{holder.sharePct ? `${holder.sharePct}%` : '—'}</td>
+              {/* A percentage with two decimals from the API; null until anything is sold. */}
+              <td className="num py-1.5 text-right">
+                {holder.sharePct !== null ? `${holder.sharePct.toFixed(2)}%` : '—'}
+              </td>
             </tr>
           ))}
         </tbody>

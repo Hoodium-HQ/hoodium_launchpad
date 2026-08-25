@@ -119,6 +119,10 @@ function Outbound({
  * on-chain. A creator who moves their Telegram has no way to correct the pinned
  * document, so these live off-chain as an overlay, and the dialog says so rather
  * than implying the on-chain record changed.
+ *
+ * Saving asks the wallet for one signature (no transaction, no gas): the API
+ * has no sessions, so the creator proves who they are per edit. See
+ * `useSaveLinks`.
  */
 function EditLinksDialog({
   open,
@@ -147,7 +151,7 @@ function EditLinksDialog({
       open={open}
       onClose={onClose}
       title="Edit links"
-      description="Stored off-chain. The pinned metadata cannot change — that is what makes it verifiable."
+      description="Stored off-chain and signed by your wallet — a signature, not a transaction. The pinned metadata cannot change; that is what makes it verifiable."
     >
       <label className="block">
         <span className="text-sm">X profile</span>
@@ -183,7 +187,7 @@ function EditLinksDialog({
 
       <div className="mt-4 flex items-center gap-2">
         <Button variant="primary" disabled={save.isPending} onClick={() => void submit()}>
-          {save.isPending ? 'Saving…' : 'Save'}
+          {save.isPending ? 'Sign to save…' : 'Save'}
         </Button>
         <Button variant="ghost" onClick={onClose}>
           Cancel

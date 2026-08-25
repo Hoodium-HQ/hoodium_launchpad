@@ -12,7 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { env } from '@/config/env'
 import { useTokenList } from '@/hooks/useLaunchpad'
 import { useNow } from '@/hooks/useNow'
-import type { TokenSort, TokenSummary, TokenWindow } from '@/lib/launchpad-api'
+import type { TokenListItem, TokenListSort, VolumeWindow } from '@/lib/launchpad-api'
 import { cn } from '@/lib/utils'
 
 /**
@@ -29,6 +29,9 @@ import { cn } from '@/lib/utils'
  * Sort, window and page live in the URL so a view someone wants to show a
  * friend survives the paste.
  */
+type TokenSort = Extract<TokenListSort, 'recent_buys' | 'newest' | 'oldest' | 'market_cap' | 'volume'>
+type TokenWindow = VolumeWindow
+
 const SORTS: Array<{ value: TokenSort; label: string }> = [
   { value: 'recent_buys', label: 'Recent buys' },
   { value: 'newest', label: 'Newest' },
@@ -82,6 +85,9 @@ export function Explore() {
   const graduated = useTokenList({ status: 'graduated', sort: 'newest', page: gpage, limit: GRADUATED_PAGE })
   const live = useTokenList({ status: 'live', sort, window, page, limit: LIVE_PAGE })
 
+  // Whole-factory counts, identical on both responses, so whichever answers
+  // first fills both badges. `live` is what is still on a curve; `launched`
+  // would count the graduated ones a second time.
   const counts = live.data?.counts ?? graduated.data?.counts
 
   return (
@@ -122,8 +128,8 @@ export function Explore() {
 
       <Section
         title="Explore"
-        count={counts?.launched}
-        countLabel="launched"
+        count={counts?.live}
+        countLabel="live"
         blurb={`Tokens still climbing toward graduation on ${env.chainName}. Every one of them can also go to zero.`}
         tokens={live.data?.items}
         isLoading={live.isLoading}
@@ -170,7 +176,7 @@ interface SectionProps {
   count: number | undefined
   countLabel?: string
   blurb: string
-  tokens: TokenSummary[] | undefined
+  tokens: TokenListItem[] | undefined
   isLoading: boolean
   isError: boolean
   emptyTitle: string

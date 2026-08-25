@@ -1,9 +1,19 @@
 import { Link } from 'react-router'
-import { tokenImageUrl, type TokenSummary } from '@/lib/launchpad-api'
-import { formatAmount } from '@/lib/money'
+import { tokenImageUrl, type TokenListItem } from '@/lib/launchpad-api'
+import { formatAmount, usdToMoney } from '@/lib/money'
 import { cn, relativeTime, sanitizeText, truncateMiddle } from '@/lib/utils'
 import { CurveProgress } from './CurveProgress'
 import { TokenAvatar } from './TokenAvatar'
+
+/**
+ * What a card needs. Structural rather than `TokenListItem` because a profile's
+ * launches carry the same facts under a narrower shape (no FDV), and the card
+ * should not demand fields it never reads.
+ */
+export type CardToken = Pick<
+  TokenListItem,
+  'address' | 'name' | 'symbol' | 'image' | 'graduated' | 'marketCapUsd' | 'progressBps' | 'createdAt'
+> & { fdvUsd?: number }
 
 /**
  * The densest repeated element, and the one the whole explore surface is built
@@ -19,7 +29,7 @@ import { TokenAvatar } from './TokenAvatar'
  * `now` comes from the parent's ticking clock so forty cards share one
  * interval and the "5s ago" on every one of them moves together.
  */
-export function TokenCard({ token, now }: { token: TokenSummary; now: number }) {
+export function TokenCard({ token, now }: { token: CardToken; now: number }) {
   // Creator-supplied and attacker-controlled.
   const name = sanitizeText(token.name, 40) || 'Unnamed'
   const symbol = sanitizeText(token.symbol, 12) || '???'
@@ -56,12 +66,12 @@ export function TokenCard({ token, now }: { token: TokenSummary; now: number }) 
 
       {/* The scan target. */}
       <p className="num mt-1 truncate text-[17px] font-medium">
-        {token.marketCapUsd != null ? formatAmount(token.marketCapUsd, { compact: true, prefix: '$' }) : '—'}{' '}
+        {formatAmount(usdToMoney(token.marketCapUsd), { compact: true, prefix: '$' })}{' '}
         <span className="text-xs font-normal text-muted-foreground">MC</span>
-        {token.graduated && token.fdvUsd != null && (
+        {token.graduated && token.fdvUsd !== undefined && (
           <span className="block text-xs font-normal text-muted-foreground sm:inline">
             <span className="hidden sm:inline">{' / '}</span>
-            {formatAmount(token.fdvUsd, { compact: true, prefix: '$' })} FDV
+            {formatAmount(usdToMoney(token.fdvUsd), { compact: true, prefix: '$' })} FDV
           </span>
         )}
       </p>
