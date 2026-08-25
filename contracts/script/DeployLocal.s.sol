@@ -51,7 +51,7 @@ contract DeployLocal is Script {
         // Optional: an address to fund with mock USDG, so the wallet you connect
         // in the browser can actually buy on a curve. Defaults to the deployer,
         // which is not the account MetaMask is holding.
-        address seedWallet = vm.envOr("SEED_WALLET", deployer);
+        d.seedWallet = vm.envOr("SEED_WALLET", deployer);
 
         uint256 usdgUnit = 1e6; // MockUSDG is 6 decimals, like mainnet USDG
         uint256 tokenUnit = 1e18;
@@ -62,9 +62,12 @@ contract DeployLocal is Script {
         MockUSDG usdg = new MockUSDG();
         MockUniswapFactory uniswapFactory = new MockUniswapFactory();
         MockPositionManager positionManager = new MockPositionManager(uniswapFactory);
+        d.usdg = address(usdg);
+        d.uniswapFactory = address(uniswapFactory);
+        d.positionManager = address(positionManager);
 
         usdg.mint(deployer, 10_000_000 * usdgUnit);
-        if (seedWallet != deployer) usdg.mint(seedWallet, 10_000_000 * usdgUnit);
+        if (d.seedWallet != deployer) usdg.mint(d.seedWallet, 10_000_000 * usdgUnit);
 
         // ── The launchpad itself, in dependency order ────────────────────────
         // LP-3.5 — the vault is a multisig, never an EOA. Three signers, threshold
@@ -75,6 +78,7 @@ contract DeployLocal is Script {
         owners[2] = vm.addr(uint256(keccak256("hoodium.local.signer.3")));
 
         FeeVault vault = new FeeVault(owners, 2);
+        d.vault = address(vault);
 
         // Forward references, exactly as Deploy.s.sol does them: the locker
         // names the manager and the manager names the factory before either
@@ -97,6 +101,8 @@ contract DeployLocal is Script {
             predictedFactory
         );
         require(address(manager) == predictedManager, "manager address drifted");
+        d.locker = address(locker);
+        d.manager = address(manager);
 
         HoodiumFactory factory = new HoodiumFactory(
             HoodiumFactory.FactoryConfig({
@@ -124,30 +130,53 @@ contract DeployLocal is Script {
 
         vm.stopBroadcast();
 
+        d.factory = address(factory);
+        d.helper = address(helper);
+        _report();
+        console2.log("Restart both dev servers after editing - neither reloads .env on its own.");
+    }
+
+    /// The report lives in its own frame: nine addresses plus the run()
+    /// locals is past what legacy codegen can keep on the stack, and solc's
+    /// answer ("stack too deep") shows up on some toolchains and not others.
+    struct Deployed {
+        address usdg;
+        address uniswapFactory;
+        address positionManager;
+        address vault;
+        address locker;
+        address manager;
+        address factory;
+        address helper;
+        address seedWallet;
+    }
+
+    Deployed private d;
+
+    function _report() internal view {
         console2.log("");
         console2.log("=== deployed ===");
-        console2.log("MockUSDG           ", address(usdg));
-        console2.log("MockUniswapFactory ", address(uniswapFactory));
-        console2.log("MockPositionManager", address(positionManager));
-        console2.log("FeeVault           ", address(vault));
-        console2.log("LPLocker           ", address(locker));
-        console2.log("GraduationManager  ", address(manager));
-        console2.log("HoodiumFactory     ", address(factory));
-        console2.log("GraduationHelper   ", address(helper));
+        console2.log("MockUSDG           ", d.usdg);
+        console2.log("MockUniswapFactory ", d.uniswapFactory);
+        console2.log("MockPositionManager", d.positionManager);
+        console2.log("FeeVault           ", d.vault);
+        console2.log("LPLocker           ", d.locker);
+        console2.log("GraduationManager  ", d.manager);
+        console2.log("HoodiumFactory     ", d.factory);
+        console2.log("GraduationHelper   ", d.helper);
         console2.log("");
-        console2.log("USDG funded        ", seedWallet);
+        console2.log("USDG funded        ", d.seedWallet);
         console2.log("");
         console2.log("=== hoodium_backend/.env ===");
-        console2.log("LAUNCHPAD_FACTORY_ADDRESS=%s", address(factory));
-        console2.log("QUOTE_TOKEN_ADDRESS=%s", address(usdg));
-        console2.log("POSITION_MANAGER_ADDRESS=%s", address(positionManager));
-        console2.log("UNISWAP_V3_FACTORY_ADDRESS=%s", address(uniswapFactory));
+        console2.log("LAUNCHPAD_FACTORY_ADDRESS=%s", d.factory);
+        console2.log("QUOTE_TOKEN_ADDRESS=%s", d.usdg);
+        console2.log("POSITION_MANAGER_ADDRESS=%s", d.positionManager);
+        console2.log("UNISWAP_V3_FACTORY_ADDRESS=%s", d.uniswapFactory);
         console2.log("");
         console2.log("=== hoodium_frontend/.env ===");
-        console2.log("VITE_LAUNCHPAD_FACTORY=%s", address(factory));
-        console2.log("VITE_QUOTE_ADDRESS=%s", address(usdg));
-        console2.log("VITE_GRADUATION_HELPER=%s", address(helper));
+        console2.log("VITE_LAUNCHPAD_FACTORY=%s", d.factory);
+        console2.log("VITE_QUOTE_ADDRESS=%s", d.usdg);
+        console2.log("VITE_GRADUATION_HELPER=%s", d.helper);
         console2.log("");
-        console2.log("Restart both dev servers after editing - neither reloads .env on its own.");
     }
 }
