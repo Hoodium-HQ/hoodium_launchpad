@@ -1,0 +1,15 @@
+node_modules/
+dist/
+dist-ssr/
+*.local
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# Skill agent. Yang dipasang di sini semuanya skill umum, bukan pengetahuan repo
+# ini — tempatnya di level user (~/.agents/skills), berlaku untuk semua proyek.
+# Yang layak di-commit hanyalah skill yang mengkodekan pengetahuan repo ini
+# sendiri; belum ada.
+.agents/
+.claude/

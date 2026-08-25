@@ -1,0 +1,353 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Palette — design-system.md section 2.
+ *
+ * Near-black canvas, a single chartreuse accent, everything else neutral. The
+ * accent earns attention precisely because nothing else competes for it.
+ */
+@layer base {
+  :root,
+  :root[data-theme='dark'] {
+    /* canvas */
+    --background: 120 6% 4%;
+    --card: 120 4% 7%;
+    --popover: 120 4% 9%;
+    --border: 120 4% 14%;
+    --input: 120 4% 14%;
+
+    /* text */
+    --foreground: 0 0% 98%;
+    --muted-foreground: 110 4% 56%;
+    --muted: 120 4% 12%;
+
+    /* brand accent */
+    --primary: 75 88% 60%;
+    --primary-foreground: 120 8% 6%;
+    --ring: 75 88% 60%;
+
+    /* semantic — deliberately NOT the brand accent (design-system section 3) */
+    --up: 145 65% 47%;
+    --down: 4 78% 58%;
+    --warning: 38 92% 55%;
+    --destructive: 0 72% 51%;
+
+    --radius: 0.875rem;
+  }
+
+  /**
+   * Light theme is optional (design.md section 9 open question 1). It is shipped
+   * here so the theme toggle is not a lie, with the accent darkened to
+   * `75 70% 38%` — #C3F53C on white is roughly 1.4:1 and fails every contrast
+   * threshold (design-system.md section 2).
+   */
+  :root[data-theme='light'] {
+    --background: 60 10% 98%;
+    --card: 0 0% 100%;
+    --popover: 0 0% 100%;
+    --border: 120 6% 88%;
+    --input: 120 6% 88%;
+
+    --foreground: 120 8% 8%;
+    --muted-foreground: 120 4% 38%;
+    --muted: 120 8% 94%;
+
+    --primary: 75 70% 38%;
+    --primary-foreground: 0 0% 100%;
+    --ring: 75 70% 38%;
+
+    --up: 145 70% 30%;
+    --down: 4 74% 45%;
+    --warning: 38 92% 34%;
+    --destructive: 0 72% 42%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    /* Anchor targets must not land under the fixed bar (design-system section 9). */
+    scroll-padding-top: 80px;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+
+  /**
+   * Taps, not gestures.
+   *
+   * `manipulation` drops the double-tap-to-zoom wait, which is the 300ms every
+   * button on this app was paying on mobile Safari. Pinch-zoom is untouched, so
+   * this costs no accessibility — unlike `user-scalable=no`, which is why that
+   * is not what is used here.
+   */
+  button,
+  a,
+  [role='button'],
+  summary,
+  label {
+    touch-action: manipulation;
+  }
+
+  /* WA-5.3 — focus must be visible everywhere, not just where someone remembered. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+
+  /* design-system.md section 6 — tabular numerals on every number, no exceptions. */
+  .num {
+    @apply font-mono tabular-nums;
+  }
+
+  [id] {
+    scroll-margin-top: 80px;
+  }
+}
+
+@layer components {
+  /**
+   * Elevation level 2 — design-system.md section 5.
+   * Budget: one per viewport. Two of them on one screen and it says nothing.
+   */
+  .surface-featured {
+    background:
+      radial-gradient(120% 80% at 0% 0%, hsl(var(--primary) / 0.1) 0%, transparent 55%),
+      hsl(var(--card));
+    border: 1px solid hsl(var(--primary) / 0.22);
+  }
+
+  /**
+   * Feed row entry — design-system.md section 10, "200ms fade-in".
+   *
+   * The spec named this interaction and nothing implemented it. Rows arriving
+   * all at once read as a repaint; a short cascade reads as data landing.
+   *
+   * Pure CSS, driven by an inline `--i` index. No scroll listener, no
+   * IntersectionObserver, no per-row React state — a fifty-row table would pay
+   * for all three. It animates `opacity` and `transform` only, and the global
+   * `prefers-reduced-motion` block above collapses the duration to nothing.
+   *
+   * The cascade is capped at eight steps. Past that the last row waits longer
+   * than the data took to arrive, which stops reading as polish and starts
+   * reading as lag.
+   */
+  .stagger-in {
+    animation: stagger-in 200ms ease-out backwards;
+    animation-delay: calc(min(var(--i, 0), 8) * 35ms);
+  }
+
+  /**
+   * A horizontally scrolling region — WA-5.2.
+   *
+   * `overflow-x: auto` alone is not enough on mobile, and the failure is
+   * invisible from the code. It clips and scrolls correctly, but Chrome still
+   * counts the *scrolled* content when it computes the page's minimum scale, so
+   * a 42rem table inside a 390px phone made the browser zoom the whole document
+   * out to 0.58 and park the layout in the left half of the screen. Measured:
+   * innerWidth 674 against a documentElement.clientWidth of 390.
+   *
+   * `contain: paint` is what makes the region opaque to that calculation, and
+   * `layout` keeps its internals from affecting outside geometry. Removing the
+   * table's `min-width` does not fix it — the natural content width is still
+   * ~641px, so the page merely zooms out slightly less.
+   */
+  .scroll-x {
+    overflow-x: auto;
+    max-width: 100%;
+    min-width: 0;
+    contain: layout paint;
+
+    /*
+     * The bar itself, thinned.
+     *
+     * A native horizontal scrollbar is ~15px on Windows Chrome, which under a
+     * 40px trending strip is a quarter of the component spent on chrome — and
+     * it renders in the OS palette, so on the near-black canvas it arrives as a
+     * light grey slab that reads as a page element rather than an affordance.
+     *
+     * `scrollbar-width: thin` is the standard property and the only one Firefox
+     * honours; the `::-webkit-` rules below are what Chrome and Safari read.
+     * Both are needed, and neither is a fallback for the other.
+     *
+     * Deliberately not `scrollbar-width: none`. A strip that scrolls with no
+     * indication that it scrolls hides half its content from anyone not
+     * carrying a trackpad (WA-5.2).
+     */
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+
+  .scroll-x::-webkit-scrollbar {
+    height: 6px;
+    width: 6px;
+  }
+
+  .scroll-x::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scroll-x::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 999px;
+  }
+
+  /* Hover, not `:hover` on the thumb alone — the target is 6px tall and nobody
+     lands on it first. Lighting up when the pointer is anywhere in the region
+     is what makes it findable. */
+  .scroll-x:hover::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.5);
+  }
+
+  /* Progressive blur navbar — design-system.md section 9. */
+  .navbar {
+    position: fixed;
+    inset-inline: 0;
+    top: 0;
+    z-index: 50;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    /*
+     * `inset-inline: 0` sizes this to the initial containing block, and on mobile
+     * Chrome the ICB grows to the widest content once anything overflows the
+     * document. Measured on the deployed site: the bar rendered 674px wide in a
+     * 393px viewport, which then fed the overflow it was reacting to.
+     *
+     * `vw` resolves against the *layout* viewport, which stays correct at 393
+     * even while the page is scaled down, so this is the one clamp that cannot
+     * be dragged along by the thing it is meant to guard against.
+     */
+    max-width: 100vw;
+    /* Landscape on a notched phone puts the cutout beside the bar, not above it. */
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+
+    background: hsl(var(--background) / 0.72);
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+    will-change: backdrop-filter;
+
+    border-bottom: 1px solid transparent;
+    transition:
+      border-color 160ms ease-out,
+      background-color 160ms ease-out;
+  }
+
+  .navbar[data-scrolled='true'] {
+    border-bottom-color: hsl(var(--border) / 0.6);
+    background: hsl(var(--background) / 0.85);
+  }
+
+  /**
+   * Layer 2 — the fade. Extends past the bar and dissolves, so there is no hard
+   * edge where the blur stops. 112px is the cap: `backdrop-filter` recomposites
+   * on every scroll frame, and a taller layer is the likeliest way to miss the
+   * WA-5.1 budget on mid-range mobile.
+   */
+  .navbar-fade {
+    position: fixed;
+    inset-inline: 0;
+    top: 0;
+    z-index: 49;
+    height: 112px;
+    max-width: 100vw; /* same clamp as `.navbar`, same reason */
+    pointer-events: none; /* covers 112px of viewport; without this it eats clicks */
+
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    mask-image: linear-gradient(to bottom, #000 0%, #000 50%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 50%, transparent 100%);
+  }
+}
+
+/* Opaque fallback, never a degraded blur (design-system.md section 9.2). */
+@supports not (backdrop-filter: blur(1px)) {
+  .navbar {
+    background: hsl(var(--background) / 0.97);
+  }
+  .navbar-fade {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .navbar {
+    background: hsl(var(--background));
+    backdrop-filter: none;
+  }
+  .navbar-fade {
+    display: none;
+  }
+}
+
+@keyframes stagger-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    /*
+     * Delay has to be zeroed too, not just duration. `.stagger-in` uses
+     * `backwards` fill, so a row holds its `from` state — fully transparent —
+     * for the whole delay. Zeroing only the duration would leave a
+     * reduced-motion user staring at invisible rows for up to 280ms, which is
+     * the precise opposite of what they asked for.
+     */
+    animation-delay: 0s !important;
+    transition-delay: 0s !important;
+  }
+}
+
+/**
+ * Safe-area gutter — `@layer utilities`, not `base`, and that placement is the
+ * whole point.
+ *
+ * `index.html` sets `viewport-fit=cover`, which lets the page paint behind the
+ * notch and the home indicator. Nothing consumed the insets, so content sat
+ * under the rounded corner in landscape. Enabling cover mode and then ignoring
+ * `env(safe-area-inset-*)` is strictly worse than leaving it off.
+ *
+ * Tailwind's `container` carries its own `padding: 1rem` and lives in the
+ * components layer, which beats base. Declared there, this rule was overridden
+ * and did nothing at all — the fix looked applied and was not.
+ */
+@layer utilities {
+  .pad-safe-x {
+    padding-left: max(1rem, env(safe-area-inset-left));
+    padding-right: max(1rem, env(safe-area-inset-right));
+  }
+}
+
+/**
+ * Third-party fixed overlays.
+ *
+ * Reown AppKit appends `<w3m-modal>` to `<body>` as `position: fixed; inset: 0`
+ * and leaves it mounted while closed. Anything fixed and full-inset inherits the
+ * initial containing block, so if the document ever widens, these widen with it
+ * and hold it open. Clamping to the layout viewport keeps a component we do not
+ * control from participating in that loop.
+ *
+ * Not scoped to the closed state on purpose: an open modal should not exceed the
+ * viewport either.
+ */
+w3m-modal,
+appkit-modal {
+  max-width: 100vw;
+}

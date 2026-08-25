@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+
+    <!--
+      Strict CSP.
+
+      This meta policy is the floor. Serve the same policy as a response header in
+      production: a meta CSP cannot express `frame-ancestors`, so clickjacking
+      protection has to come from the header.
+
+      `%CSP_CONNECT_SRC%`, `%CSP_IMG_SRC%` and `%CSP_FRAME_SRC%` are substituted at
+      build/serve time from VITE_API_URL and VITE_RPC_URL plus Reown AppKit's fixed
+      origins (see vite.config.ts). Both this policy and the dev-server header are
+      enforced together and the browser applies the intersection, so the origins
+      have to come from one place — a hard-coded list here silently blocks whatever
+      the header allows.
+
+      `img-src` needs the API origin, not just `'self'`: token logos are proxied by
+      the backend precisely so no third-party image host is contacted, and in
+      development that backend is a different port. Where the API shares the page's
+      origin this collapses back to `'self'`. It also carries the wallet-registry
+      image hosts, which are the one third-party image source here — those URLs are
+      minted by Reown at modal-open time, so there is nothing to proxy.
+
+      `font-src` is `'self'` only: Geist is bundled by Vite and served from our
+      own origin, and AppKit's request for fonts.googleapis.com is left blocked.
+
+      No analytics scripts anywhere: a third-party script on a route where a user
+      signs a transaction is a supply-chain risk with no upside.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="
+        default-src 'self';
+        script-src 'self';
+        style-src 'self' 'unsafe-inline';
+        img-src %CSP_IMG_SRC%;
+        font-src 'self' data:;
+        manifest-src 'self';
+        worker-src 'self';
+        connect-src %CSP_CONNECT_SRC%;
+        frame-src %CSP_FRAME_SRC%;
+        object-src 'none';
+        base-uri 'none';
+        form-action 'none';
+      "
+    />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+
+    <title>Hoodium Launchpad — Launch and trade tokens on Robinhood Chain</title>
+    <meta
+      name="description"
+      content="Launch and explore fixed-supply tokens on Robinhood Chain. Bonding curves priced in USDG that graduate into locked Uniswap v3 liquidity. Your wallet submits every transaction; Hoodium never custodies assets."
+    />
+
+    <!--
+      Brand assets live in `public/`. The SVG favicon is served first because
+      it stays sharp at every size; the .ico is the fallback for browsers that
+      still ignore SVG favicons.
+    -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="any" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+
+    <!-- Home-screen install. -->
+    <link rel="manifest" href="/site.webmanifest" />
+    <meta name="theme-color" content="#0A0B0A" />
+
+    <!-- Share previews — the app-level default; per-token OG tags are a later concern. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Hoodium Launchpad" />
+    <meta property="og:site_name" content="Hoodium Launchpad" />
+    <meta property="og:url" content="https://launchpad.hoodium.app/" />
+    <meta
+      property="og:description"
+      content="Launch and explore fixed-supply tokens on Robinhood Chain. Bonding curves priced in USDG that graduate into locked Uniswap v3 liquidity. Your wallet submits every transaction; Hoodium never custodies assets."
+    />
+    <meta property="og:image" content="https://launchpad.hoodium.app/logo.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Hoodium Launchpad" />
+    <meta name="twitter:image" content="https://launchpad.hoodium.app/logo.png" />
+    <link rel="canonical" href="https://launchpad.hoodium.app/" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
