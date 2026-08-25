@@ -210,7 +210,10 @@ export function TokenPage() {
                 {lpProtocolFeeShareBps !== null
                   ? `${(10_000 - lpProtocolFeeShareBps) / 100}% creator / ${lpProtocolFeeShareBps / 100}% protocol`
                   : 'per the locker contract'}
-                . Holders earn nothing from fees — the token has no tax and no rebase.
+                . Holders earn nothing from fees — the token has no tax and no rebase.{' '}
+                <Link to="/learn" className="text-foreground hover:underline">
+                  How it works →
+                </Link>
               </p>
             </div>
           </div>

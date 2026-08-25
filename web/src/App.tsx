@@ -15,6 +15,7 @@ import { useTheme } from '@/store/ui'
  */
 const TokenPage = lazy(() => import('@/routes/TokenPage').then((m) => ({ default: m.TokenPage })))
 const LaunchToken = lazy(() => import('@/routes/LaunchToken').then((m) => ({ default: m.LaunchToken })))
+const Learn = lazy(() => import('@/routes/Learn').then((m) => ({ default: m.Learn })))
 const Profile = lazy(() => import('@/routes/Profile').then((m) => ({ default: m.Profile })))
 
 /**
@@ -47,6 +48,7 @@ export function App() {
             {/* Everything is public — a shared token link must open for a stranger with no wallet. */}
             <Route path="/" element={<Explore />} />
             <Route path="/t/:address" element={<TokenPage />} />
+            <Route path="/learn" element={<Learn />} />
             <Route path="/create" element={<LaunchToken />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/profile/:address" element={<Profile />} />

@@ -96,7 +96,13 @@ export function Logo({
   return (
     <span className={cn('inline-flex items-center gap-2', className)}>
       <LogoMark className={cn('text-primary', markClassName)} animate={animate} />
-      <span className="font-semibold tracking-tight">Hoodium</span>
+      <span className="flex flex-col leading-none">
+        <span className="font-semibold tracking-tight">Hoodium</span>
+        {/* Which Hoodium this is — the products share one mark and one wordmark. */}
+        <span className="mt-0.5 text-[9px] font-medium uppercase tracking-[0.22em] text-muted-foreground">
+          Launchpad
+        </span>
+      </span>
     </span>
   )
 }

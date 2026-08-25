@@ -212,7 +212,10 @@ export function Explore() {
           figure read from its pool. Ordering above is a plain sort on measured on-chain activity.
         </p>
         <p>
-          Hoodium does not review, endorse, or rank any token for payment, and issues no token of its own.
+          Hoodium does not review, endorse, or rank any token for payment, and issues no token of its own.{' '}
+          <Link to="/learn" className="text-foreground hover:underline">
+            How it works →
+          </Link>
         </p>
       </div>
     </div>

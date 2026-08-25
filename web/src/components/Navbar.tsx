@@ -13,7 +13,7 @@ import { Logo } from './Logo'
  *
  * Ported from hoodium.app's bar so the two products share one shell: the same
  * mark, the same search field with its shortcut hint, the same outline wallet
- * control on the right. What is this product's own is the link set — Explore,
+ * control on the right. What is this product's own is the link set — Explore, Learn,
  * Create, Profile — and the accent "Create" button, which is the launchpad's
  * one primary action and belongs in persistent chrome for the same reason a
  * "new" button does in any authoring tool.
@@ -29,6 +29,7 @@ import { Logo } from './Logo'
  */
 const LINKS = [
   { to: '/', label: 'Explore', end: true },
+  { to: '/learn', label: 'Learn', end: false },
   { to: '/create', label: 'Create', end: false },
   { to: '/profile', label: 'Profile', end: false },
 ] as const
@@ -231,11 +232,26 @@ export function Navbar() {
             }}
           >
             <div className="flex flex-col py-2">
+              {/* Also a tab below; repeated here so the panel reads as a
+                  complete map of the site rather than a leftover. */}
+              <NavLink
+                to="/learn"
+                style={{ '--i': 0 } as React.CSSProperties}
+                className={({ isActive }) =>
+                  cn(
+                    'stagger-in rounded-lg px-3 py-3 text-base transition-colors duration-[120ms]',
+                    isActive ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                  )
+                }
+              >
+                How it works
+              </NavLink>
+
               <a
                 href="https://hoodium.app"
                 target="_blank"
                 rel="noopener noreferrer"
-                style={{ '--i': 0 } as React.CSSProperties}
+                style={{ '--i': 1 } as React.CSSProperties}
                 className="stagger-in rounded-lg px-3 py-3 text-base text-muted-foreground transition-colors duration-[120ms] hover:text-foreground"
               >
                 Hoodium — liquidity positions
@@ -244,7 +260,7 @@ export function Navbar() {
               <button
                 type="button"
                 onClick={toggle}
-                style={{ '--i': 1 } as React.CSSProperties}
+                style={{ '--i': 2 } as React.CSSProperties}
                 className="stagger-in mt-1 flex items-center gap-2 rounded-lg px-3 py-3 text-base text-muted-foreground transition-colors duration-[120ms] hover:text-foreground"
               >
                 {theme === 'dark' ? <Sun className="size-4" aria-hidden /> : <Moon className="size-4" aria-hidden />}

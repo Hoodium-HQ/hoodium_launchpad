@@ -1,4 +1,5 @@
 import { Mail } from 'lucide-react'
+import { Link } from 'react-router'
 import { cn } from '@/lib/utils'
 
 /**
@@ -34,6 +35,14 @@ export function Footer({ className }: { className?: string }) {
           </p>
 
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            {/* Product first, then the people. */}
+            <Link
+              to="/learn"
+              className="rounded text-xs text-muted-foreground transition-colors duration-[120ms] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              How it works
+            </Link>
+
             <a
               href="https://hoodium.app"
               target="_blank"

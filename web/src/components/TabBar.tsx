@@ -1,4 +1,4 @@
-import { Compass, Plus, User } from 'lucide-react'
+import { BookOpen, Compass, Plus, User } from 'lucide-react'
 import { useRef } from 'react'
 import { Link, useLocation } from 'react-router'
 import { cn } from '@/lib/utils'
@@ -7,10 +7,10 @@ import { cn } from '@/lib/utils'
  * The mobile tab bar — primary navigation below `md`, at the bottom edge.
  *
  * Ported from hoodium.app, where the same bar carries Home / Pools / Alerts /
- * Portfolio. Here it carries the three destinations this product has: what
- * there is to buy, the form that makes more of it, and your own holdings.
- * Three rather than four is what the product has, not a compromise — a fourth
- * tab would be a page that does not exist.
+ * Portfolio. Here it carries the four destinations this product has: what
+ * there is to buy, how the whole thing works, the form that makes more of it,
+ * and your own holdings. Four is what hoodium.app's bar carries too, so the
+ * row's measurements were sized for it.
  *
  * Above `md` it is not rendered at all: the navbar carries the same links
  * there, and two navigations claiming the same destinations is a second focus
@@ -23,8 +23,9 @@ import { cn } from '@/lib/utils'
  * detail page "came from" would light one the reader may have arrived at from
  * a shared link.
  */
-function activeKey(pathname: string): 'explore' | 'create' | 'profile' | null {
+function activeKey(pathname: string): 'explore' | 'learn' | 'create' | 'profile' | null {
   if (pathname === '/') return 'explore'
+  if (pathname === '/learn') return 'learn'
   if (pathname === '/create') return 'create'
   if (pathname === '/profile' || pathname.startsWith('/profile/')) return 'profile'
   return null
@@ -35,7 +36,7 @@ function activeKey(pathname: string): 'explore' | 'create' | 'profile' | null {
  * slides between tabs is positioned by index, and `length` is what tells the
  * CSS how wide a column is.
  */
-const ORDER = ['explore', 'create', 'profile'] as const
+const ORDER = ['explore', 'learn', 'create', 'profile'] as const
 
 export function TabBar() {
   const location = useLocation()
@@ -67,6 +68,7 @@ export function TabBar() {
         />
 
         <TabLink to="/" label="Explore" icon={Compass} active={active === 'explore'} />
+        <TabLink to="/learn" label="Learn" icon={BookOpen} active={active === 'learn'} />
         <TabLink to="/create" label="Create" icon={Plus} active={active === 'create'} />
         <TabLink to="/profile" label="Profile" icon={User} active={active === 'profile'} />
       </ul>
