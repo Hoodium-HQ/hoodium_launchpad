@@ -26,6 +26,16 @@ const seeded = (n) => () => ((n = (n * 1103515245 + 12345) & 0x7fffffff) / 0x7ff
 const rand = seeded(42)
 const hex = (len) => Array.from({ length: len }, () => '0123456789abcdef'[Math.floor(rand() * 16)]).join('')
 const addr = () => `0x${hex(40)}`
+/*
+ * Per-row generators for the paged feeds. The global `rand` advances on every
+ * request, so a re-poll of the same page used to return *different* trades —
+ * new txHashes, traders and amounts — which re-keyed every row in the app and
+ * replayed its entry fade on each 4s refetch. Rows are seeded from the token
+ * and their ordinal instead, so a page reads the same on every request, as it
+ * would from the real indexer.
+ */
+const rowRand = (t, n) => seeded((Number.parseInt(t.address.slice(2, 10), 16) ^ (n * 2654435761)) & 0x7fffffff)
+const hexWith = (r, len) => Array.from({ length: len }, () => '0123456789abcdef'[Math.floor(r() * 16)]).join('')
 const ago = (s) => new Date(Date.now() - s * 1000).toISOString()
 const usd = (baseUnits, decimals = 6) => Number(baseUnits) / 10 ** decimals
 
@@ -172,19 +182,20 @@ function trades(t, page, limit) {
   const total = t.tradeCount
   const items = Array.from({ length: Math.max(0, Math.min(limit, total - (page - 1) * limit)) }, (_, i) => {
     const n = (page - 1) * limit + i
+    const r = rowRand(t, n)
     const side = n % 3 === 0 ? 'sell' : 'buy'
-    const usdgAmount = BigInt(Math.floor(rand() * 400 + 5)) * 10n ** 6n
+    const usdgAmount = BigInt(Math.floor(r() * 400 + 5)) * 10n ** 6n
     return {
       side,
-      trader: n % 5 === 0 ? t.creator : addr(),
+      trader: n % 5 === 0 ? t.creator : `0x${hexWith(r, 40)}`,
       usdgAmount: usdgAmount.toString(),
       usdValue: usd(usdgAmount),
-      tokenAmount: (BigInt(Math.floor(rand() * 900_000 + 1_000)) * 10n ** 18n).toString(),
+      tokenAmount: (BigInt(Math.floor(r() * 900_000 + 1_000)) * 10n ** 18n).toString(),
       feeUsdg: (usdgAmount / 100n).toString(),
       priceUsdg: t._detail.curveState.price,
       priceUsd: t.priceUsd,
       blockNumber: 9_000_000 - n * 3,
-      txHash: `0x${hex(64)}`,
+      txHash: `0x${hexWith(r, 64)}`,
       logIndex: n % 7,
       at: ago(n * 97 + 8),
       finalized: n > 1,
@@ -200,7 +211,7 @@ function holders(t, page, limit) {
     const n = (page - 1) * limit + i
     const balance = BigInt(Math.floor(40_000_000 / (n + 1))) * 10n ** 18n
     return {
-      holder: n === 0 ? t.creator : addr(),
+      holder: n === 0 ? t.creator : `0x${hexWith(rowRand(t, n), 40)}`,
       balance: balance.toString(),
       balanceUnits: usd(balance, 18),
       sharePct: sold > 0n ? Number((balance * 10_000n) / sold) / 100 : null,
