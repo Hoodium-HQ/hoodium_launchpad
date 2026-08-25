@@ -139,7 +139,12 @@ contract HoodiumFactory is ReentrancyGuard {
         require(c.graduationTarget > c.graduationFee, "fee >= target");
         require(c.tradeFeeBps < BPS && c.creatorFeeShareBps <= BPS, "bad bps");
         require(c.devBuyMaxBps <= BPS && c.snipeMaxBps <= BPS, "bad caps");
-        require(c.hdmLaunchBurn == 0 || c.hdm != address(0), "burn without hdm");
+        // Both directions: a burn with no token is unpayable, and a token with
+        // no burn publishes an `hdm()` this factory never charges. A non-
+        // contract address would revert every launch on an immutable contract
+        // with no way to repoint it.
+        require((c.hdm == address(0)) == (c.hdmLaunchBurn == 0), "hdm/burn mismatch");
+        require(c.hdm == address(0) || c.hdm.code.length > 0, "hdm not a contract");
 
         usdg = IERC20(c.usdg);
         feeVault = c.feeVault;
@@ -243,7 +248,13 @@ contract HoodiumFactory is ReentrancyGuard {
         // Burned before the dev buy, so a launch that reverts later never
         // destroys anyone's HDM, and one that succeeds always did.
         if (hdmLaunchBurn > 0) {
+            // Assert the effect, not the call. `burnFrom` has no return value
+            // in this interface, so a token that reports failure the legacy way
+            // would let the launch through for a fee nobody paid; measuring
+            // supply also catches a partially-burning or fee-on-transfer token.
+            uint256 supplyBefore = IERC20Burnable(hdm).totalSupply();
             IERC20Burnable(hdm).burnFrom(msg.sender, hdmLaunchBurn);
+            require(IERC20Burnable(hdm).totalSupply() + hdmLaunchBurn == supplyBefore, "burn ineffective");
             emit LaunchFeeBurned(msg.sender, hdmLaunchBurn);
         }
 
@@ -254,9 +265,7 @@ contract HoodiumFactory is ReentrancyGuard {
         );
         _launchesByCreator[msg.sender].push(tokenAddress);
 
-        emit TokenLaunched(
-            tokenAddress, curveAddress, msg.sender, name, symbol, metadataURI, devBuySpent, devBuyTokens
-        );
+        emit TokenLaunched(tokenAddress, curveAddress, msg.sender, name, symbol, metadataURI, devBuySpent, devBuyTokens);
     }
 
     /**
@@ -326,12 +335,17 @@ contract HoodiumFactory is ReentrancyGuard {
         uint256 cap = devBuyCapTokens();
         if (quoted > cap) revert DevBuyTooLarge(quoted, cap);
 
+        // Measure the delta rather than the balance. Anyone can `transfer`
+        // USDG to this contract, and reading the whole balance as "the refund"
+        // made every smaller dev buy underflow and revert until someone with a
+        // larger one came along and pocketed the donation.
+        uint256 balanceBefore = usdg.balanceOf(address(this));
         usdg.safeTransferFrom(msg.sender, address(this), devBuyUsdg);
         usdg.forceApprove(curveAddress, devBuyUsdg);
         devBuyTokens = curve.devBuy(msg.sender, devBuyUsdg, minTokens);
         usdg.forceApprove(curveAddress, 0);
 
-        uint256 leftover = usdg.balanceOf(address(this));
+        uint256 leftover = usdg.balanceOf(address(this)) - balanceBefore;
         devBuySpent = devBuyUsdg - leftover;
         if (leftover > 0) usdg.safeTransfer(msg.sender, leftover);
     }

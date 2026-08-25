@@ -126,7 +126,7 @@ contract LaunchFeeBurnTest is BaseTest {
 
     function test_constructorRefusesABurnWithoutAToken() public {
         Terms memory t = _defaultTerms();
-        vm.expectRevert(bytes("burn without hdm"));
+        vm.expectRevert(bytes("hdm/burn mismatch"));
         new HoodiumFactory(
             HoodiumFactory.FactoryConfig({
                 usdg: address(usdg),

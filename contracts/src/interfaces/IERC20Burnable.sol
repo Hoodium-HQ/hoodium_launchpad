@@ -12,4 +12,7 @@ pragma solidity 0.8.28;
  */
 interface IERC20Burnable {
     function burnFrom(address account, uint256 value) external;
+
+    /// @dev Read around the burn to prove it happened; see `HoodiumFactory`.
+    function totalSupply() external view returns (uint256);
 }
