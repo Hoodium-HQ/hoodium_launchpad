@@ -26,6 +26,14 @@ export const CLIPART = {
   ticket: 'Price tag',
   compass: 'Spinning compass',
   rocket: 'Rocket over a bar chart',
+  curve: 'Rising curve chart',
+  graduation: 'Mortarboard on a diploma',
+  padlock: 'Padlock',
+  pie: 'Pie chart',
+  scale: 'Balance scale',
+  shield: 'Shield with a tick',
+  warning: 'Warning triangle',
+  book: 'Open book',
 } as const
 
 export type ClipartName = keyof typeof CLIPART

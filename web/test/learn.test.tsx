@@ -46,6 +46,16 @@ describe('Learn', () => {
     expect(screen.getAllByText('69,000 USDG').length).toBeGreaterThan(0)
   })
 
+  it('illustrates every lifecycle step and section with a decorative sticker', () => {
+    const { container } = renderLearn()
+    for (const name of ['rocket', 'curve', 'graduation', 'padlock', 'pie', 'scale', 'coins-sprout', 'shield', 'warning', 'book']) {
+      const img = container.querySelector(`img[data-clipart="${name}"]`)
+      expect(img).not.toBeNull()
+      expect(img).toHaveAttribute('alt', '')
+      expect(img).toHaveAttribute('aria-hidden')
+    }
+  })
+
   it('sets the document title', () => {
     renderLearn()
     expect(document.title).toContain('How it works')

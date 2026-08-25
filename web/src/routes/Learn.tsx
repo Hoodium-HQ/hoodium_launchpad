@@ -1,7 +1,7 @@
 import { ArrowRight, ExternalLink, Plus } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Link } from 'react-router'
-import { Clipart } from '@/components/Clipart'
+import { Clipart, type ClipartName } from '@/components/Clipart'
 import { buttonVariants } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { env } from '@/config/env'
@@ -160,22 +160,22 @@ export function Learn() {
       {/* ── Lifecycle ──────────────────────────────────────────────────── */}
       <Section label="The lifecycle" blurb="Four stages. A token is always in exactly one of them.">
         <ol className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Step n={1} title="Launch">
+          <Step n={1} title="Launch" art="rocket">
             Pick a name, a symbol and an image; the image is pinned to IPFS. The creation fee is{' '}
             <Num>{creationFee}</Num>. The creator may buy in the same transaction, capped at{' '}
             <Num>{devBuyMax}%</Num> of supply.
           </Step>
-          <Step n={2} title="Curve">
+          <Step n={2} title="Curve" art="curve">
             Buy and sell against the curve. The price rises with every buy and falls with every sell. Each
             trade pays a <Num>{tradeFee}%</Num> fee, split <Num>{creatorShare}%</Num> to the creator and{' '}
             <Num>{hoodiumShare}%</Num> to Hoodium.
           </Step>
-          <Step n={3} title="Graduation">
+          <Step n={3} title="Graduation" art="graduation">
             At <Num>{target}</Num> raised, the curve closes in one atomic transaction. The remaining{' '}
             {env.quoteSymbol} and the <Num>{lpAllocationCompact}</Num> pool allocation seed a full-range
             Uniswap v3 pool on the 1% fee tier.
           </Step>
-          <Step n={4} title="Locked pool">
+          <Step n={4} title="Locked pool" art="padlock">
             The LP NFT sits in a locker with no withdrawal function. Only accrued swap fees can be
             collected, split <Num>{lpCreatorShare}%</Num> to the creator and <Num>{lpProtocolShare}%</Num>{' '}
             to the protocol.
@@ -184,7 +184,7 @@ export function Learn() {
       </Section>
 
       {/* ── Tokenomics ─────────────────────────────────────────────────── */}
-      <Section label="Tokenomics" blurb="Every token launched from this factory has the same terms.">
+      <Section label="Tokenomics" art="pie" blurb="Every token launched from this factory has the same terms.">
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Figure label="Total supply" value={tokens(t.totalSupply)} note="Fixed at launch. No mint, no burn." />
           <Figure
@@ -210,7 +210,7 @@ export function Learn() {
       </Section>
 
       {/* ── Formula ────────────────────────────────────────────────────── */}
-      <Section label="The curve, in one formula" blurb="A constant product over virtual reserves.">
+      <Section label="The curve, in one formula" art="scale" blurb="A constant product over virtual reserves.">
         <Card className="p-5">
           <pre className="num overflow-x-auto whitespace-pre text-sm leading-relaxed text-foreground">
             {'(virtualUSDG + raised) × (virtualTokens + tokensRemaining) = k'}
@@ -228,7 +228,7 @@ export function Learn() {
       </Section>
 
       {/* ── Fees ───────────────────────────────────────────────────────── */}
-      <Section label="Fees, and who gets them" blurb="Three fees. Holders are not paid from any of them.">
+      <Section label="Fees, and who gets them" art="coins-sprout" blurb="Three fees. Holders are not paid from any of them.">
         <Card>
           <div className="divide-y divide-border">
             <div className="hidden grid-cols-[11rem_13rem_1fr] gap-4 px-4 py-3 text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-muted-foreground sm:grid">
@@ -265,7 +265,7 @@ export function Learn() {
       </Section>
 
       {/* ── Protections ────────────────────────────────────────────────── */}
-      <Section label="Protections" blurb="What the contracts enforce, not what a policy promises.">
+      <Section label="Protections" art="shield" blurb="What the contracts enforce, not what a policy promises.">
         <div className="grid gap-3 sm:grid-cols-2">
           <Point title="Anti-snipe">
             For the first <Num>{t.snipeBlocks}</Num> blocks a single buy is capped at <Num>{snipeMax}%</Num>{' '}
@@ -287,7 +287,7 @@ export function Learn() {
       </Section>
 
       {/* ── Risks ──────────────────────────────────────────────────────── */}
-      <Section label="Risks — read this" blurb="The same words you will be asked to acknowledge before your first trade.">
+      <Section label="Risks — read this" art="warning" blurb="The same words you will be asked to acknowledge before your first trade.">
         <Card className="p-5">
           <ul className="space-y-2.5 text-sm leading-relaxed text-muted-foreground">
             <li>
@@ -324,7 +324,7 @@ export function Learn() {
       </Section>
 
       {/* ── Glossary ───────────────────────────────────────────────────── */}
-      <Section label="Glossary" blurb="The words this site uses, one line each.">
+      <Section label="Glossary" art="book" blurb="The words this site uses, one line each.">
         <Card className="p-5">
           <dl className="grid gap-x-8 gap-y-3 text-sm sm:grid-cols-2">
             <Def term="MC">
@@ -375,12 +375,31 @@ export function Learn() {
   )
 }
 
-/** A tracked label over a block, as hoodium.app heads a board. */
-function Section({ label, blurb, children }: { label: string; blurb: string; children: ReactNode }) {
+/**
+ * A tracked label over a block, as hoodium.app heads a board. The sticker sits
+ * to the right of the label and blurb from `sm` up; on a phone it is dropped
+ * so the pictures do not push the words below the fold.
+ */
+function Section({
+  label,
+  blurb,
+  art,
+  children,
+}: {
+  label: string
+  blurb: string
+  art?: ClipartName
+  children: ReactNode
+}) {
   return (
     <section className="scroll-mt-20">
-      <h2 className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-muted-foreground">{label}</h2>
-      <p className="mt-1 text-sm text-muted-foreground">{blurb}</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-muted-foreground">{label}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{blurb}</p>
+        </div>
+        {art && <Clipart name={art} className="hidden size-11 shrink-0 sm:block" />}
+      </div>
       <div className="mt-4">{children}</div>
     </section>
   )
@@ -391,15 +410,17 @@ function Num({ children }: { children: ReactNode }) {
   return <span className="num text-foreground">{children}</span>
 }
 
-function Step({ n, title, children }: { n: number; title: string; children: ReactNode }) {
+/** One lifecycle stage: the numbered chip and title, with its sticker top-right. */
+function Step({ n, title, art, children }: { n: number; title: string; art: ClipartName; children: ReactNode }) {
   return (
     <li className="flex h-full flex-col">
       <Card className="flex h-full flex-col p-4">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-start gap-2.5">
           <span className="num grid size-7 shrink-0 place-items-center rounded-lg bg-primary text-xs font-medium text-primary-foreground">
             {n}
           </span>
-          <h3 className="text-card-title">{title}</h3>
+          <h3 className="text-card-title mt-1">{title}</h3>
+          <Clipart name={art} className="-mr-1 -mt-1 ml-auto size-12 shrink-0 sm:size-14" />
         </div>
         <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{children}</p>
       </Card>
