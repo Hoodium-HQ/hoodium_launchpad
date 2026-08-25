@@ -11,6 +11,14 @@ import type { RiskFlag } from '../types.js'
 /** Concentration above this is worth telling a buyer about. */
 const CONCENTRATION_FLAG_PCT = 20
 
+/**
+ * ...but only once enough has been sold for a share to mean something. The
+ * creator's own first buy is 100% of "circulating supply" by definition, and
+ * a warning that fires on every fresh launch teaches buyers to ignore it.
+ * 8M tokens is 1% of the default 800M curve allocation.
+ */
+export const CONCENTRATION_MIN_SOLD = 8_000_000n * 10n ** 18n
+
 /** Cyrillic, Greek and fullwidth Latin lookalikes. */
 const CONFUSABLES = /[Ѐ-ӿͰ-Ͽ！-～]/
 
@@ -37,13 +45,16 @@ export function sharePct(balance: bigint, sold: bigint): string {
 
 export function buildFlags(input: {
   creatorSharePct: string
+  /** Tokens sold on the curve so far, base units. Omitted = enough. */
+  tokensSold?: bigint
   priorLaunches: number
   priorGraduations: number
   hasConfusableSymbol: boolean
 }): RiskFlag[] {
   const flags: RiskFlag[] = []
 
-  if (Number(input.creatorSharePct) >= CONCENTRATION_FLAG_PCT) flags.push('creator_concentration')
+  const enoughSold = input.tokensSold === undefined || input.tokensSold >= CONCENTRATION_MIN_SOLD
+  if (enoughSold && Number(input.creatorSharePct) >= CONCENTRATION_FLAG_PCT) flags.push('creator_concentration')
 
   // "Previously launched tokens that failed" — stated as a count, not a verdict.
   const failed = input.priorLaunches - input.priorGraduations
@@ -72,9 +83,10 @@ export async function recomputeRisk(chainId: number, tokenAddress: string): Prom
   ])
 
   // Share of *circulating* supply, not of total — total would never flag anything early.
-  const creatorSharePct = sharePct(toBigInt(creatorHolding?.balance ?? '0'), toBigInt(token.tokensSold ?? '0'))
+  const tokensSold = toBigInt(token.tokensSold ?? '0')
+  const creatorSharePct = sharePct(toBigInt(creatorHolding?.balance ?? '0'), tokensSold)
   const hasConfusableSymbol = assessConfusable(token.symbol ?? '', token.name ?? '')
-  const flags = buildFlags({ creatorSharePct, priorLaunches, priorGraduations, hasConfusableSymbol })
+  const flags = buildFlags({ creatorSharePct, tokensSold, priorLaunches, priorGraduations, hasConfusableSymbol })
 
   await TokenModel.updateOne(
     { chainId, tokenAddress: token.tokenAddress },

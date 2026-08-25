@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseIpfsPath, website } from '../src/services/ipfs.js'
 import { MAX_IMAGE_UPLOAD_BYTES, sniffImageType } from '../src/services/pinata.js'
-import { buildFlags, sharePct } from '../src/services/risk.js'
+import { CONCENTRATION_MIN_SOLD, buildFlags, sharePct } from '../src/services/risk.js'
 import { bps, pricePerToken, toUnits, valueOf } from '../src/lib/amounts.js'
 
 const CIDv0 = 'QmT78zSuBmuS4z925WZfrqQ1qHaJ56DQaTfyMUF7F8ff5o'
@@ -69,6 +69,12 @@ describe('risk', () => {
     expect(buildFlags({ creatorSharePct: '1', priorLaunches: 3, priorGraduations: 1, hasConfusableSymbol: true })).toEqual([
       'confusable_symbol',
     ])
+  })
+  it('does not call a share concentrated until enough has been sold', () => {
+    const base = { creatorSharePct: '100', priorLaunches: 0, priorGraduations: 0, hasConfusableSymbol: false }
+    expect(buildFlags({ ...base, tokensSold: 22_960n * 10n ** 18n })).toEqual([])
+    expect(buildFlags({ ...base, tokensSold: CONCENTRATION_MIN_SOLD - 1n })).toEqual([])
+    expect(buildFlags({ ...base, tokensSold: CONCENTRATION_MIN_SOLD })).toEqual(['creator_concentration'])
   })
 })
 
