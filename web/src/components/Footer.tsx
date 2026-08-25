@@ -6,9 +6,11 @@ import { cn } from '@/lib/utils'
  * The site footer — hoodium.app's, plus the one paragraph this product cannot
  * do without.
  *
- * hoodium.app's footer is a copyright line and two ways to reach the people
- * behind the site. That shape is kept whole so the two products end the same
- * way. Above it sits the risk notice, because a launchpad that charges a fee
+ * hoodium.app's footer is a copyright line, the other Hoodium products, and
+ * two ways to reach the people behind the site. That shape is kept whole so
+ * every product ends the same way — and so a visitor who lands on any one of
+ * the three hosts can reach the other two without going back to a search
+ * engine. Above it sits the risk notice, because a launchpad that charges a fee
  * on every trade has to say so somewhere every page reaches, and the foot of
  * the page is where a reader (and a directory reviewer) looks for it.
  *
@@ -50,6 +52,27 @@ export function Footer({ className }: { className?: string }) {
               className="rounded text-xs text-muted-foreground transition-colors duration-[120ms] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               hoodium.app
+            </a>
+
+            {/* The siblings, named the way each names itself: the LP app is
+                "Pools", the token page is "HDM". A visitor who arrives here
+                first should not have to guess that the other two exist. */}
+            <a
+              href="https://pools.hoodium.app"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded text-xs text-muted-foreground transition-colors duration-[120ms] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Pools
+            </a>
+
+            <a
+              href="https://token.hoodium.app"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded text-xs text-muted-foreground transition-colors duration-[120ms] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              HDM
             </a>
 
             <a
